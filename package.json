@@ -1,6 +1,6 @@
 {
   "name": "dsh-grok-provider",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Clean-room Grok Build provider for DeepSeek Harness with official CLI browser authentication",
   "type": "module",
   "license": "MIT",
@@ -78,6 +78,9 @@
     "@deepseek-ai/dsh-client-ui-settings": { "optional": true },
     "@deepseek-ai/dsh-commands": { "optional": true },
     "@deepseek-ai/dsh-subprocess": { "optional": true }
+  },
+  "dependencies": {
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",

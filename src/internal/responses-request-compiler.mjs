@@ -1,5 +1,6 @@
 import { offloadRequestImagesWithPolicy, offloadedImageText } from "@deepseek-ai/dsh-llm"
 
+import { transcodeRequestImage } from "./image-transcoder.mjs"
 import {
   ResponsesRequestTooLargeError,
   UnsupportedResponsesRequestError,
@@ -12,7 +13,7 @@ const MAX_CONTENT_BLOCKS = 20_000
 const FUNCTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const SEARCH_MODEL_ID = "grok-4.6"
 const CAPTURE_IMAGE_POLICY = Object.freeze({
-  mediaTypes: Object.freeze(["image/jpeg", "image/png"]),
+  mediaTypes: Object.freeze(["image/jpeg", "image/png", "image/webp"]),
 })
 const EMPTY_SERVER_TOOLS = Object.freeze([])
 const DEFAULT_SEARCH_POLICY = Object.freeze({
@@ -48,10 +49,14 @@ export class InvalidRequestImageProjectionError extends Error {
 
 export function createResponsesRequestCompiler({
   getAttachmentStore = () => undefined,
+  transcodeImage = transcodeRequestImage,
   searchPolicy,
 } = {}) {
   if (typeof getAttachmentStore !== "function") {
     throw new TypeError("Invalid Grok attachment store source")
+  }
+  if (typeof transcodeImage !== "function") {
+    throw new TypeError("Invalid Grok image transcoder")
   }
   const capturedSearchPolicy = captureSearchPolicy(searchPolicy)
 
@@ -95,7 +100,7 @@ export function createResponsesRequestCompiler({
     validateImagePlacements(messages)
     const imageMessages = snapshotImageRequestMessages(messages, model)
     const blocks = collectImageBlocks(imageMessages)
-    const refs = indexUniqueImageRefs(blocks, CAPTURE_IMAGE_POLICY)
+    const refs = indexUniqueImageRefs(blocks)
     encodeRequest({ messages: imageMessages, requestImages: placeholderRequestImages(blocks) })
 
     return Object.freeze({
@@ -113,6 +118,7 @@ export function createResponsesRequestCompiler({
         route,
         serverTools,
         signal,
+        transcodeImage,
       }),
     })
   }
@@ -135,19 +141,20 @@ async function compileImageRequest({
   route,
   serverTools,
   signal,
+  transcodeImage,
 }) {
   if (!isMatchingRoute({ model, provider }, route)) throw new UnsupportedResponsesRequestError()
   validateSearchRoute(route, serverTools, model)
   signal?.throwIfAborted()
   const policy = parseImagePolicy(route)
-  for (const ref of capturedRefs.values()) validateImageRef(ref, policy)
+  for (const ref of capturedRefs.values()) validateImageRef(ref, CAPTURE_IMAGE_POLICY)
   let messages = offloadRequestImagesWithPolicy(capturedMessages, {
     representation: "raw",
     maxImages: policy.maxImages,
     placeholder: offloadedImageText,
   })
   const blocks = collectImageBlocks(messages)
-  const refs = indexUniqueImageRefs(blocks, policy)
+  const refs = indexUniqueImageRefs(blocks)
   const store = getAttachmentStore()
   if (!store || typeof store.readImageRequest !== "function") {
     throw new UnsupportedImageInputError()
@@ -159,7 +166,10 @@ async function compileImageRequest({
     signal?.throwIfAborted()
     const version = captureRequestImage(returned, policy)
     validateRequestImage(version, ref, policy)
-    versionsById.set(attachmentId, version)
+    versionsById.set(
+      attachmentId,
+      await normalizeRequestImage(version, policy, transcodeImage),
+    )
   }))
 
   const requestImages = new Map(blocks.map((block) => [
@@ -612,10 +622,10 @@ function collectImageBlocks(messages) {
   return blocks
 }
 
-function indexUniqueImageRefs(blocks, policy) {
+function indexUniqueImageRefs(blocks) {
   const refs = new Map()
   for (const block of blocks) {
-    validateImageRef(block.attachment, policy)
+    validateImageRef(block.attachment, CAPTURE_IMAGE_POLICY)
     const attachmentId = String(block.attachment.attachmentId)
     const existing = refs.get(attachmentId)
     if (existing !== undefined && !sameImageRef(existing, block.attachment)) {
@@ -653,7 +663,7 @@ function validateRequestImage(version, ref, policy) {
     !isPlainObject(version.attachment) ||
     !sameImageRef(version.attachment, ref) ||
     !(version.data instanceof Uint8Array) ||
-    !policy.mediaTypes.includes(version.mediaType) ||
+    !isSupportedProjectionMediaType(version.mediaType, policy) ||
     !isPositiveSafeInteger(version.bytes) ||
     version.bytes !== version.data.byteLength ||
     version.bytes > policy.readPolicy.maxBytes ||
@@ -669,6 +679,42 @@ function validateRequestImage(version, ref, policy) {
   ) {
     throw new InvalidRequestImageProjectionError()
   }
+}
+
+async function normalizeRequestImage(version, policy, transcodeImage) {
+  if (version.mediaType !== "image/webp") return version
+
+  let transcoded
+  try {
+    transcoded = await transcodeImage(version, {
+      ...policy.readPolicy,
+      maxDimension: policy.maxDimension,
+    })
+  } catch (error) {
+    if (error instanceof InvalidRequestImageProjectionError) throw error
+    throw new InvalidRequestImageProjectionError()
+  }
+  if (!isPlainObject(transcoded) || !policy.mediaTypes.includes(transcoded.mediaType)) {
+    throw new InvalidRequestImageProjectionError()
+  }
+  const normalized = {
+    ...version,
+    variantId: `${version.variantId}:grok-${transcoded?.mediaType ?? "unknown"}`,
+    data: transcoded?.data,
+    mediaType: transcoded?.mediaType,
+    bytes: transcoded?.bytes,
+    width: transcoded?.width,
+    height: transcoded?.height,
+    depth: "uchar",
+    space: "srgb",
+    hasAlpha: transcoded?.hasAlpha,
+  }
+  validateRequestImage(normalized, version.attachment, policy)
+  return captureRequestImage(normalized, policy)
+}
+
+function isSupportedProjectionMediaType(mediaType, policy) {
+  return policy.mediaTypes.includes(mediaType) || mediaType === "image/webp"
 }
 
 function captureRequestImage(version, policy) {
@@ -768,6 +814,11 @@ function sameOriginalDimensions(left, right) {
 function hasExpectedMagic(data, mediaType) {
   if (mediaType === "image/jpeg") {
     return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff
+  }
+  if (mediaType === "image/webp") {
+    return data.length >= 12 &&
+      data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 &&
+      data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50
   }
   return data.length >= 8 &&
     data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47 &&
