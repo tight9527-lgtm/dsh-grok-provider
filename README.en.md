@@ -4,11 +4,11 @@
 
 Use an already authenticated official Grok Build account from DeepSeek Harness, with dynamic model discovery, streaming reasoning, image input, optional Web/X Search, tool calls, and an account quota/model capability dashboard.
 
-> Unofficial community project; not affiliated with xAI or DeepSeek Harness. This README describes the `dsh-grok-provider@1.0.5` artifact; version `0.1.8` was published and then withdrawn and cannot be reused.
+> Unofficial community project; not affiliated with xAI or DeepSeek Harness. This README describes the `dsh-grok-provider@1.0.6` artifact; version `0.1.8` was published and then withdrawn and cannot be reused.
 
-`1.0.5` repairs unavailable account services and unknown CLI versions after upgrading to DeepSeek Harness `0.1.5-rc.2`. Six account operations now use the host-authenticated shared `/api/grok-auth/*` routes, restoring status, CLI diagnostics, model discovery, and quota reads.
+`1.0.6` fixes transparent WebP attachments being rejected before a Grok request. Transparent WebP images are transcoded to PNG before the Responses request; opaque WebP images are transcoded to JPEG.
 
-This README is included in the `1.0.5` npm tarball, and the exact installation command below is pinned to `1.0.5`. The previous version with completed supply-chain readback is `1.0.4`.
+This README is included in the `1.0.6` npm tarball, and the exact installation command below is pinned to `1.0.6`. The previous version with completed supply-chain readback is `1.0.5`.
 
 ## What it provides
 
@@ -18,7 +18,7 @@ This README is included in the `1.0.5` npm tarball, and the exact installation c
 | Credentials | Reuses official CLI session state without creating a second token store |
 | Models | Discovers every model visible to the account at runtime; no static model allowlist |
 | Conversations | Streaming Responses text, reasoning, encrypted reasoning replay, usage, and finish reasons |
-| Images | Only exact `grok-4.6` accepts bounded JPEG/PNG images from Harness attachments; `grok-4.5` and all other models remain text-only |
+| Images | Only exact `grok-4.6` accepts bounded JPEG/PNG/WebP images from Harness attachments; WebP is converted to Grok-compatible PNG/JPEG before sending; `grok-4.5` and all other models remain text-only |
 | Search | Exact `grok-4.6` provides default-off Web/X Search; switches are saved through the live settings service |
 | Tools | Returns function calls to the Harness permission layer; the provider never executes tools, and local `web_search` / `x_search` remain when the corresponding Search setting is off |
 | Account dashboard | Login status, weekly/monthly quota, reset time, dynamic model capabilities and reasoning efforts |
@@ -47,7 +47,7 @@ When the network is reachable and OIDC discovery succeeds, the official CLI open
 Install the exact version:
 
 ```sh
-dsh plugin --profile web add dsh-grok-provider@1.0.5
+dsh plugin --profile web add dsh-grok-provider@1.0.6
 dsh web
 ```
 
@@ -145,6 +145,12 @@ Directory inclusion is not an endorsement by xAI or DeepSeek Harness. [Listing P
 
 ## Compatibility and scope
 
+### `1.0.6` fix boundary
+
+- Fix the pre-network `UNSUPPORTED_CONTENT` failure caused when DSH normalizes transparent image attachments to `image/webp`.
+- Accept bounded WebP during capture; transcode transparent WebP to PNG and opaque WebP to JPEG. WebP is never sent directly on the Responses wire.
+- Add transparent and opaque WebP regressions; a real Grok request confirms transparent WebP is sent with PNG MIME and completes SSE.
+
 ### `1.0.5` fix boundary
 
 - [Release 1.0.5](https://github.com/yoshino-xiao7/dsh-grok-provider/releases/tag/v1.0.5) and npm `latest` are available; dual-platform CI, exact artifact bytes, Registry signatures, and provenance have been verified.
@@ -192,7 +198,7 @@ Directory inclusion is not an endorsement by xAI or DeepSeek Harness. [Listing P
 - Two-layer redacted real-account verification passed against the final source: raw Web/X probes each completed one 64-event response, observed the requested Search kind, and reached `completed`; the production adapter completed 5 Responses calls, with direct Web/X both ending in `stop` and a Harness-shaped local `x_search` call/result continuation ending `tool-calls`, `tool-calls`, then `stop`, with one local call in each of the first two turns. That continuation did not place a Harness `x_search` function definition beside an xAI `{ type: "x_search" }` server descriptor in the same wire request; `1.0.1` later isolated that combination as an HTTP 400 conflict. No results, URLs, prompts, identity, or credentials were retained; this is not publication, OAuth, or real-device Windows evidence.
 - The manifest and lockfile are synchronized at `1.0.0`; the Node 24 suite reports 245 tests, 243 pass, 0 fail, and 2 platform skips. Production audit reports zero vulnerabilities, and the deterministic build/bundle comparison, 72-entry dry-run pack, secret scan, and diff check pass. Code PR #28, main CI run [`33308371009`](https://github.com/yoshino-xiao7/dsh-grok-provider/actions/runs/33308371009), the final release commit, dual-platform final CI, unique artifact, exact authorization, and Registry/signature/attestation/provenance readback are complete.
 
-| Item | `1.0.5` compatibility boundary |
+| Item | `1.0.6` compatibility boundary |
 | --- | --- |
 | DeepSeek Harness | Exact support for `0.1.5-rc.2` |
 | Node.js | `>=24.19.0` |
@@ -202,7 +208,7 @@ Directory inclusion is not an endorsement by xAI or DeepSeek Harness. [Listing P
 | Grok CLI | No full-version lock; official path, `login --oauth` capability, and production OIDC credential contract are enforced |
 | Models | Every account catalog model whose backend has a strict codec in this release |
 
-`0.1.11` preserves the published image boundary: image input is enabled only for exact `grok-4.6`, while `grok-4.5` and every other dynamically discovered model remain text-only. Image sending has been confirmed in a real Harness conversation. Images must be verified JPEG/PNG projections from the Harness attachment service. Ordinary user content and images nested one level inside a tool result are supported with fixed `detail:"high"`; URLs, filesystem paths, file IDs, and caller-supplied data URLs are rejected. Private reasoning in ordinary user/system history is omitted while adjacent visible text remains ordered.
+`1.0.6` preserves the published image boundary: image input is enabled only for exact `grok-4.6`, while `grok-4.5` and every other dynamically discovered model remain text-only. Images must be verified JPEG/PNG/WebP projections from the Harness attachment service; WebP is converted to Grok-compatible PNG/JPEG before sending. Ordinary user content and images nested one level inside a tool result are supported with fixed `detail:"high"`; URLs, filesystem paths, file IDs, and caller-supplied data URLs are rejected. Private reasoning in ordinary user/system history is omitted while adjacent visible text remains ordered.
 
 Each projected image is limited to 4 MiB, 16,777,216 pixels, and 8192px per side. A request retains at most eight images and 8 MiB of projected image bytes. When a limit is exceeded, the globally oldest images are offloaded to Harness text placeholders; the final JSON remains capped at 16 MiB.
 

@@ -4,11 +4,11 @@
 
 让 DeepSeek Harness 使用你已登录的官方 Grok Build 账号：动态模型发现、流式推理、图片输入、可选 Web/X Search、工具调用，以及账号额度与模型能力面板。
 
-> 非官方社区项目，与 xAI 或 DeepSeek Harness 官方无隶属关系。本说明对应 `dsh-grok-provider@1.0.5` 制品；`0.1.8` 曾发布后撤回且版本号不可复用。
+> 非官方社区项目，与 xAI 或 DeepSeek Harness 官方无隶属关系。本说明对应 `dsh-grok-provider@1.0.6` 制品；`0.1.8` 曾发布后撤回且版本号不可复用。
 
-`1.0.5` 修复更新到 DeepSeek Harness `0.1.5-rc.2` 后账户页面显示“服务不可用”、CLI 版本未知的问题。六个账户操作改用主机认证的共享 `/api/grok-auth/*` 路由，恢复登录状态、CLI 检测、模型目录与额度读取。
+`1.0.6` 修复带透明通道的 WebP 图片在 Grok 请求前被拒绝的问题。透明 WebP 会在写入 Responses 请求前转码为 PNG，不透明 WebP 转码为 JPEG。
 
-本 README 随 `1.0.5` 一起进入 npm tarball，下面的精确安装命令也固定为 `1.0.5`。上一份已完成供应链回读的版本为 `1.0.4`。
+本 README 随 `1.0.6` 一起进入 npm tarball，下面的精确安装命令也固定为 `1.0.6`。上一份已完成供应链回读的版本为 `1.0.5`。
 
 ## 它解决什么问题
 
@@ -18,7 +18,7 @@
 | 凭据 | 复用官方 CLI 的登录状态；插件不创建第二份 token 存储 |
 | 模型 | 运行时读取账号可见的全部 Grok Build 模型，不维护静态模型白名单 |
 | 对话 | Responses 流式文本、reasoning、加密 reasoning replay、usage 与 finish reason |
-| 图片 | 仅精确 `grok-4.6` 接收 Harness attachment 中有界的 JPEG/PNG 图片；`grok-4.5` 与其他模型保持 text-only |
+| 图片 | 仅精确 `grok-4.6` 接收 Harness attachment 中有界的 JPEG/PNG/WebP 图片；WebP 在发送前转为 Grok 接受的 PNG/JPEG，`grok-4.5` 与其他模型保持 text-only |
 | 搜索 | 精确 `grok-4.6` 提供默认关闭的 Web/X Search；使用实时 settings service 保存开关 |
 | 工具 | 将 function call 交回 Harness 权限层；Provider 本身不执行工具，关闭对应 Search 开关时保留本地 `web_search` / `x_search` |
 | 账户面板 | 登录状态、每周/月额度、重置时间、动态模型能力与 reasoning 档位 |
@@ -47,7 +47,7 @@ grok models
 安装精确版本：
 
 ```sh
-dsh plugin --profile web add dsh-grok-provider@1.0.5
+dsh plugin --profile web add dsh-grok-provider@1.0.6
 dsh web
 ```
 
@@ -145,6 +145,12 @@ dsh web
 
 ## 兼容性与范围
 
+### `1.0.6` 修复边界
+
+- 修复 DSH 附件库把带透明通道的图片规范化为 `image/webp` 后，`grok-4.6` 在网络请求前失败的问题。
+- 捕获阶段接受有界 WebP；透明 WebP 转为 PNG，不透明 WebP 转为 JPEG，Responses wire 不直接发送 WebP。
+- 增加透明与不透明 WebP 的回归覆盖；本地真实 Grok 请求确认透明 WebP 以 PNG MIME 发出并完成 SSE。
+
 ### `1.0.5` 修复边界
 
 - [1.0.5 发布](https://github.com/yoshino-xiao7/dsh-grok-provider/releases/tag/v1.0.5) 与 npm `latest` 已更新；双平台 CI、唯一制品字节、Registry 签名和 provenance 均已验证。
@@ -192,7 +198,7 @@ dsh web
 - 最终源码完成两层脱敏真实账号复验：原始 Web/X 协议探针各 1 次请求、各 64 events，分别观察到对应 Search 且终态 `completed`；生产 adapter 共完成 5 次 Responses，direct Web/X 均为 `stop`，Harness 形状的本地 `x_search` call/result 续跑三轮依次为 `tool-calls`、`tool-calls`、`stop`，前两轮各 1 次本地调用。该续跑没有在同一 wire request 中同时放入 Harness `x_search` function definition 与 xAI `{ type: "x_search" }` server descriptor；`1.0.1` 后续才隔离出这一 HTTP 400 冲突。未保存结果、URL、prompt、身份或凭据；这些不是发布、OAuth 或 Windows 真机证据。
 - manifest/lock 已同步为 `1.0.0`；Node 24 全量测试为 245 项、243 pass、0 fail、2 项平台跳过，生产依赖审计为 0 漏洞，确定性 build/bundle、72 项 dry-run pack、秘密模式扫描与 diff 检查均通过。代码 PR #28、main CI run [`33308371009`](https://github.com/yoshino-xiao7/dsh-grok-provider/actions/runs/33308371009)、最终 release commit、双平台 final CI、唯一制品、精确授权及 Registry/signature/attestation/provenance 回读均已完成。
 
-| 项目 | `1.0.5` 兼容边界 |
+| 项目 | `1.0.6` 兼容边界 |
 | --- | --- |
 | DeepSeek Harness | 精确支持 `0.1.5-rc.2` |
 | Node.js | `>=24.19.0` |
@@ -202,7 +208,7 @@ dsh web
 | Grok CLI | 不锁完整版本；严格校验官方路径、`login --oauth` 能力与生产 OIDC 凭据契约 |
 | 模型 | 当前账号目录中 backend 已被严格 codec 支持的全部模型 |
 
-`0.1.11` 沿用已发布版本的图片边界：只为精确的 `grok-4.6` 开启图片输入；`grok-4.5` 与其他动态发现的模型继续按 text-only 处理。图片发送已在真实 Harness 对话中确认可用。图片只能来自 Harness attachment service 的已验证 JPEG/PNG 投影，支持普通用户内容和一层工具结果中的图片，并固定使用 `detail:"high"`；不接受 URL、文件路径、file ID 或调用方预制的 data URL。普通 user/system 历史中的私有 reasoning 会被省略并保留相邻可见文本。
+`1.0.6` 沿用已发布版本的图片边界：只为精确的 `grok-4.6` 开启图片输入；`grok-4.5` 与其他动态发现的模型继续按 text-only 处理。图片只能来自 Harness attachment service 的已验证 JPEG/PNG/WebP 投影；WebP 在发送前转换为 Grok 接受的 PNG/JPEG。支持普通用户内容和一层工具结果中的图片，并固定使用 `detail:"high"`；不接受 URL、文件路径、file ID 或调用方预制的 data URL。普通 user/system 历史中的私有 reasoning 会被省略并保留相邻可见文本。
 
 每张投影图片最多 4 MiB、16,777,216 像素且任一边不超过 8192px；每次请求最多保留 8 张、投影字节合计最多 8 MiB。超限时按全局最旧优先移除图片并保留 Harness 的文本占位，最终 JSON 仍受 16 MiB 上限约束。
 

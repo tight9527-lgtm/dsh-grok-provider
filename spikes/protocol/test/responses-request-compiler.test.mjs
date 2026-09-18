@@ -1574,10 +1574,98 @@ test("unsupported source MIME fails before resolving attachment storage", async 
       id: "user-webp",
       role: "user",
       source: { kind: "user" },
-      content: [{ type: "image", attachment: imageRef({ mediaType: "image/webp" }) }],
+      content: [{ type: "image", attachment: imageRef({ mediaType: "image/gif" }) }],
     }],
   }, imageRoute()), UnsupportedImageInputError)
   assert.equal(lookups, 0)
+})
+
+test("a WebP attachment is transcoded before it reaches the Responses wire", async () => {
+  const webpData = Buffer.from(
+    "UklGRloAAABXRUJQVlA4WAoAAAAQAAAAAQAAAAAAQUxQSAMAAAAAgIAAVlA4IDAAAADQAQCdASoCAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA=",
+    "base64",
+  )
+  const attachment = imageRef({ mediaType: "image/webp", bytes: webpData.byteLength })
+  const compiler = createResponsesRequestCompiler({
+    getAttachmentStore: () => ({
+      async readImageRequest(ref) {
+        return {
+          variantId: `fixture:${ref.attachmentId}`,
+          attachment: ref,
+          data: webpData,
+          mediaType: "image/webp",
+          bytes: webpData.byteLength,
+          width: 1,
+          height: 1,
+          depth: "uchar",
+          space: "srgb",
+          hasAlpha: true,
+        }
+      },
+    }),
+  })
+
+  const request = await compileRequest(compiler, {
+    provider: "grok",
+    model: "grok-4.6",
+    messages: [{
+      id: "user-webp",
+      role: "user",
+      source: { kind: "user" },
+      content: [{ type: "image", attachment }],
+    }],
+  }, imageRoute())
+
+  const imageUrl = request.input[0].content[0].image_url
+  assert.match(imageUrl, /^data:image\/png;base64,/u)
+  assert.deepEqual(
+    Buffer.from(imageUrl.slice("data:image/png;base64,".length), "base64").subarray(0, 8),
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  )
+})
+
+test("an opaque WebP attachment is transcoded to JPEG", async () => {
+  const webpData = Buffer.from(
+    "UklGRjwAAABXRUJQVlA4IDAAAAAQAgCdASoCAAEAAUAmJaACdLoB+AH4AAPIAP7scN/97BU5Nb/wff/bs2yr4/lMAAA=",
+    "base64",
+  )
+  const attachment = imageRef({ mediaType: "image/webp", bytes: webpData.byteLength })
+  const compiler = createResponsesRequestCompiler({
+    getAttachmentStore: () => ({
+      async readImageRequest(ref) {
+        return {
+          variantId: `fixture:${ref.attachmentId}`,
+          attachment: ref,
+          data: webpData,
+          mediaType: "image/webp",
+          bytes: webpData.byteLength,
+          width: 2,
+          height: 1,
+          depth: "uchar",
+          space: "srgb",
+          hasAlpha: false,
+        }
+      },
+    }),
+  })
+
+  const request = await compileRequest(compiler, {
+    provider: "grok",
+    model: "grok-4.6",
+    messages: [{
+      id: "user-opaque-webp",
+      role: "user",
+      source: { kind: "user" },
+      content: [{ type: "image", attachment }],
+    }],
+  }, imageRoute())
+
+  const imageUrl = request.input[0].content[0].image_url
+  assert.match(imageUrl, /^data:image\/jpeg;base64,/u)
+  assert.deepEqual(
+    Buffer.from(imageUrl.slice("data:image/jpeg;base64,".length), "base64").subarray(0, 3),
+    Buffer.from([0xff, 0xd8, 0xff]),
+  )
 })
 
 test("validated request image bytes are isolated from later store mutation", async () => {

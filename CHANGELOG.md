@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.6 - 2026-09-18
+
+- Fix `UNSUPPORTED_CONTENT` before the network request when DSH normalizes transparent attachments to `image/webp`.
+- Accept bounded WebP projections during capture, transcode transparent WebP to PNG and opaque WebP to JPEG, and keep unsupported WebP off the Responses wire.
+- Add focused WebP regressions and complete a redacted real `grok-4.6` request using the local authenticated Grok account.
+
 ## 1.0.5 - 2026-09-13
 
 - Published from `49f08ba62bd9eb77fbf122413e08f28fc56d7207` after dual-platform CI `34734335106` via Trusted Publisher `34734462191`. The unique 81-file, 280,675-byte artifact is byte-identical across local, GitHub Release and npm; `latest=1.0.5`, Registry installation, signatures and provenance verify. SHA-256: `7e4772a8335ed9560db2ed59a34b9154f3f1ddc1a60be9707443648d6a72e77f`.
