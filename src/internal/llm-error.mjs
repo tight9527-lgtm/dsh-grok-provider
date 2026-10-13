@@ -1,4 +1,4 @@
-import { LlmError } from "@deepseek-ai/dsh-llm"
+import { IMAGE_OFFLOAD_REQUIRED_CODE, LlmError } from "@deepseek-ai/dsh-llm"
 
 import { AuthModeUnavailableError } from "./auth-registry.mjs"
 import {
@@ -8,6 +8,7 @@ import {
 import { GrokTransportError } from "./grok-transport.mjs"
 import { OfficialCredentialFileError } from "./official-credential-loader.mjs"
 import {
+  ImageOffloadRequiredError,
   UnsupportedImageInputError,
   UnsupportedSearchCapabilityError,
 } from "./responses-request-compiler.mjs"
@@ -64,6 +65,15 @@ export function mapLlmError(error, signal) {
       cause: error,
       ...(error.status === undefined ? {} : { status: error.status }),
     })
+  }
+  if (error instanceof ImageOffloadRequiredError) {
+    // Route-budget refusal: the Harness owns the durable offload decision, so
+    // the failure names exactly how many oldest retained occurrences to omit.
+    return new LlmError(
+      "The Grok request must offload older images before it fits the route image budget",
+      IMAGE_OFFLOAD_REQUIRED_CODE,
+      { cause: error, offloadImages: error.offloadImages },
+    )
   }
   if (
     error instanceof UnsupportedImageInputError ||

@@ -1,7 +1,14 @@
-const CLI_STATES = new Set(["missing", "invalid", "unavailable"])
+import { NETWORK_STATES } from "./network-proxy.mjs"
 
-export function createRuntimeDiagnostics({ pluginVersion, getCliInspector }) {
-  if (!isSafeVersion(pluginVersion) || typeof getCliInspector !== "function") {
+const CLI_STATES = new Set(["missing", "invalid", "unavailable"])
+const NETWORK_STATE_SET = new Set(NETWORK_STATES)
+
+export function createRuntimeDiagnostics({ pluginVersion, getCliInspector, getNetworkState }) {
+  if (
+    !isSafeVersion(pluginVersion) ||
+    typeof getCliInspector !== "function" ||
+    typeof getNetworkState !== "function"
+  ) {
     throw new TypeError("Invalid Grok runtime diagnostics dependencies")
   }
 
@@ -11,18 +18,18 @@ export function createRuntimeDiagnostics({ pluginVersion, getCliInspector }) {
     signal?.throwIfAborted()
     const inspector = getCliInspector()
     if (inspector === undefined) {
-      return frozenDiagnostics(pluginVersion, { state: "unavailable" })
+      return frozenDiagnostics(pluginVersion, { state: "unavailable" }, readNetworkState(getNetworkState))
     }
     if (typeof inspector !== "function") {
       throw new TypeError("Invalid Grok CLI diagnostics inspector")
     }
     if (active !== undefined && active.inspector !== inspector) {
-      return frozenDiagnostics(pluginVersion, { state: "unavailable" })
+      return frozenDiagnostics(pluginVersion, { state: "unavailable" }, readNetworkState(getNetworkState))
     }
     const operation = active ?? startInspection(inspector)
     const cli = normalizeCliDiagnostic(await waitForInspection(operation, signal))
     signal?.throwIfAborted()
-    return frozenDiagnostics(pluginVersion, cli)
+    return frozenDiagnostics(pluginVersion, cli, readNetworkState(getNetworkState))
   }
 
   function startInspection(inspector) {
@@ -59,10 +66,35 @@ export function createRuntimeDiagnostics({ pluginVersion, getCliInspector }) {
 }
 
 export function normalizeRuntimeDiagnostics(value) {
-  if (!hasExactKeys(value, ["pluginVersion", "cli"]) || !isSafeVersion(value.pluginVersion)) {
+  if (
+    !hasExactKeys(value, ["pluginVersion", "cli", "network"]) ||
+    !isSafeVersion(value.pluginVersion)
+  ) {
     throw new TypeError("Invalid Grok runtime diagnostics")
   }
-  return frozenDiagnostics(value.pluginVersion, normalizeCliDiagnostic(value.cli))
+  return frozenDiagnostics(
+    value.pluginVersion,
+    normalizeCliDiagnostic(value.cli),
+    normalizeNetworkState(value.network),
+  )
+}
+
+/**
+ * Read the current outbound route as one closed value. The state never carries
+ * an address, so the diagnostics outcome keeps its promise not to leak a proxy
+ * URL or upstream endpoint.
+ * @param getNetworkState - current route source.
+ * @returns one of {@link NETWORK_STATES}.
+ */
+function readNetworkState(getNetworkState) {
+  return normalizeNetworkState(getNetworkState())
+}
+
+function normalizeNetworkState(value) {
+  if (typeof value !== "string" || !NETWORK_STATE_SET.has(value)) {
+    throw new TypeError("Invalid Grok network state")
+  }
+  return value
 }
 
 function normalizeCliDiagnostic(value) {
@@ -79,8 +111,12 @@ function normalizeCliDiagnostic(value) {
   return Object.freeze({ state: value.state })
 }
 
-function frozenDiagnostics(pluginVersion, cli) {
-  return Object.freeze({ pluginVersion, cli: Object.freeze({ ...cli }) })
+function frozenDiagnostics(pluginVersion, cli, network) {
+  return Object.freeze({
+    pluginVersion,
+    cli: Object.freeze({ ...cli }),
+    network,
+  })
 }
 
 async function waitForInspection(operation, signal) {

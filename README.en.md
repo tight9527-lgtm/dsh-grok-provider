@@ -4,11 +4,11 @@
 
 Use an already authenticated official Grok Build account from DeepSeek Harness, with dynamic model discovery, streaming reasoning, image input, optional Web/X Search, tool calls, and an account quota/model capability dashboard.
 
-> Unofficial community project; not affiliated with xAI or DeepSeek Harness. This README describes the `dsh-grok-provider@1.0.6` artifact; version `0.1.8` was published and then withdrawn and cannot be reused.
+> Unofficial community project; not affiliated with xAI or DeepSeek Harness. This README describes the `dsh-grok-provider@2.1.0` artifact; version `0.1.8` was published and then withdrawn and cannot be reused.
 
-`1.0.6` fixes transparent WebP attachments being rejected before a Grok request. Transparent WebP images are transcoded to PNG before the Responses request; opaque WebP images are transcoded to JPEG.
+`2.1.0` ports the provider to DeepSeek Harness `0.2.0-rc.2`: `@deepseek-ai/dsh-settings` removed `installSection`, `@deepseek-ai/dsh-llm` removed `offloadRequestImagesWithPolicy` (a missing named import made the host fail during load), and the browser side replaced the `settingsScope` service with `configForms`. The `1.0.x` line cannot load on the newer host, so `2.1.0` is the only usable version, and it supports the `0.2.0` line exclusively.
 
-This README is included in the `1.0.6` npm tarball, and the exact installation command below is pinned to `1.0.6`. The previous version with completed supply-chain readback is `1.0.5`.
+This README is included in the `2.1.0` npm tarball, and the exact installation command below is pinned to `2.1.0`. The previous version with completed supply-chain readback is `1.0.5`.
 
 ## What it provides
 
@@ -20,6 +20,7 @@ This README is included in the `1.0.6` npm tarball, and the exact installation c
 | Conversations | Streaming Responses text, reasoning, encrypted reasoning replay, usage, and finish reasons |
 | Images | Only exact `grok-4.6` accepts bounded JPEG/PNG/WebP images from Harness attachments; WebP is converted to Grok-compatible PNG/JPEG before sending; `grok-4.5` and all other models remain text-only |
 | Search | Exact `grok-4.6` provides default-off Web/X Search; switches are saved through the live settings service |
+| Network | The settings page carries an outbound proxy (default `http://127.0.0.1:7897`) that applies to this plugin's Grok requests only; an unlistening local proxy falls back to a direct connection, while an unreachable non-local proxy fails closed |
 | Tools | Returns function calls to the Harness permission layer; the provider never executes tools, and local `web_search` / `x_search` remain when the corresponding Search setting is off |
 | Account dashboard | Login status, weekly/monthly quota, reset time, dynamic model capabilities and reasoning efforts |
 | Surfaces | Bilingual Web settings and a closed `/grok` TUI command set |
@@ -28,8 +29,8 @@ This README is included in the `1.0.6` npm tarball, and the exact installation c
 
 ### 1. Prerequisites
 
-- DeepSeek Harness `0.1.5-rc.2`
-- Node.js `24.19.0` or newer
+- DeepSeek Harness `0.2.0-rc.2`
+- Node.js `24.21.0` or newer
 - macOS arm64 or Windows x64
 - Official Grok Build CLI with `login --oauth` support and the default Grok home
 
@@ -47,7 +48,7 @@ When the network is reachable and OIDC discovery succeeds, the official CLI open
 Install the exact version:
 
 ```sh
-dsh plugin --profile web add dsh-grok-provider@1.0.6
+dsh plugin --profile web add dsh-grok-provider@2.1.0
 dsh web
 ```
 
@@ -62,6 +63,37 @@ Open **Settings → Grok Build**:
 
 The provider does not take over the login page or ask you to paste an access or refresh token.
 
+### 4. Proxy and network (check this first when you are signed in but quota/models stay empty)
+
+The provider's `/v1/models`, `/v1/billing`, and `/v1/responses` calls all use the host process's `fetch`, and **Node's `fetch` does not read the Windows system proxy** — it honours only the `HTTP_PROXY` / `HTTPS_PROXY` environment variables. If the host was started from an ordinary shortcut while this machine reaches the internet through a local proxy such as Clash, you get:
+
+- the official `grok` CLI signs in normally (the CLI handles its own proxy, and the credential is a local file);
+- yet the settings page keeps reporting the quota and the model catalog as temporarily unavailable, and no Grok model appears in the model selector.
+
+**Settings → Grok Build → Network proxy** settles this directly: turn it on and fill in the address — no host restart needed. Its default is the usual local port, `http://127.0.0.1:7897`.
+
+How the route is chosen (the page repeats this under the address field):
+
+| Situation | Result |
+| --- | --- |
+| The host's launch environment already carries `HTTP_PROXY` / `HTTPS_PROXY` | The environment wins and the plugin adds nothing: the DSH launcher already installed the process-wide dispatcher |
+| The plugin's proxy is off | Direct connection |
+| The address is a local proxy that is listening | This plugin's Grok requests go through it |
+| The address is a local proxy that is not listening | **Falls back to a direct connection**, and the page says no local proxy was detected |
+| The address is unusable (not `http(s)`, carries credentials, or is empty) | Treated as direct, and the page reports the address as unusable |
+| The address is a non-local proxy | No fallback: an unreachable proxy fails closed instead of sending traffic around it |
+
+You can also skip the page and provide the variables in the host's launch environment instead:
+
+```bat
+set "HTTPS_PROXY=http://127.0.0.1:7897"
+set "HTTP_PROXY=http://127.0.0.1:7897"
+set "NODE_USE_ENV_PROXY=1"
+set "NO_PROXY=localhost,127.0.0.1,::1,192.168.*,10.*"
+```
+
+Keep the loopback entries in `NO_PROXY`. To verify, set those variables in a shell and run `node -e "fetch('https://cli-chat-proxy.grok.com/v1/models').then(r=>console.log(r.status))"`: a timeout (`UND_ERR_CONNECT_TIMEOUT`) means no proxy is in effect, while `401` (the normal unauthenticated answer) means the request arrived. The provider only uses the address you give it under the rules above; it never parses or changes the Windows system proxy or any other traffic in the host process, it refuses an address carrying credentials, and it writes no proxy address to logs.
+
 ## User surfaces
 
 The Web settings page shows:
@@ -74,7 +106,7 @@ The Web settings page shows:
 
 When protobuf-backed billing includes a complete weekly/monthly period but omits a zero-valued percentage, the page restores “0% used / 100% remaining.” Other incomplete responses remain unknown.
 
-Harness `0.1.5-rc.2` does not expose an icon field on `settings.section`. The Provider embeds the MIT-licensed `IconThinkOutline16` path geometry from `@deepseek-ai/dsh-client-ui-primitives@0.1.0-rc.7` and displays it only when the `Grok Build` label and settings-dialog DOM structure produce one exact match; otherwise it safely keeps the Host gear. The compatibility observer, marker, and style are all removed when the plugin unloads.
+Harness `0.2.0-rc.2` does not expose an icon field on `settings.section`. The Provider embeds the MIT-licensed `IconThinkOutline16` path geometry from `@deepseek-ai/dsh-client-ui-primitives@0.1.0-rc.7` and displays it only when the `Grok Build` label and settings-dialog DOM structure produce one exact match; otherwise it safely keeps the Host gear. The compatibility observer, marker, and style are all removed when the plugin unloads.
 
 ## Plugin preview
 
@@ -145,6 +177,24 @@ Directory inclusion is not an endorsement by xAI or DeepSeek Harness. [Listing P
 
 ## Compatibility and scope
 
+### `2.1.0` addition: an outbound proxy in the settings page
+
+- Two runtime-editable Config fields (both `.volatile()`): `proxyEnabled` (default `true`) and `proxyUrl` (default `http://127.0.0.1:7897`). The settings page gains a Network proxy section — switch, address field, save — and names the route the host actually resolved.
+- The proxy applies to this plugin's Grok requests only. Each request resolves its route and uses an `undici` `ProxyAgent` as that request's dispatcher, so the host process's global dispatcher, other plugins, and all other host traffic stay untouched.
+- Order of decision: a proxy already in the launch environment (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`) wins and nothing is layered on top (the DSH launcher already installed the process-wide dispatcher); then `proxyEnabled`; the address accepts only `http:`/`https:` URLs without credentials.
+- Fallback: a local proxy (`127.0.0.1` / `localhost` / `::1`) is judged by one bounded TCP probe; an unlistening one falls back to a direct connection and says so on the page, while a successful probe is cached for 30 seconds. A non-local proxy is never probed and never bypassed: an unreachable one fails closed.
+- The diagnostics outcome gains the closed `network` field (`environment`/`disabled`/`proxy`/`proxy-unavailable`/`proxy-invalid`). It reports the kind of route and never carries a proxy address or upstream URL.
+- New runtime dependency `undici ^8.10.0`, the same library the Harness itself uses in `@deepseek-ai/dsh-http-proxy`; it has no native code.
+
+### `2.0.1` port boundary
+
+- DeepSeek Harness `0.2.0-rc.2` removed the three APIs this plugin depended on: `ctx.settings.installSection` from `@deepseek-ai/dsh-settings`, `offloadRequestImagesWithPolicy` from `@deepseek-ai/dsh-llm` (a missing named import failed the host during load), and the browser `settingsScope` service. The `1.0.x` line cannot load on the newer host.
+- The image path now follows the Harness `0.2.0` host-decision protocol: the route declares occurrence and byte budgets, and exceeding them fails with `IMAGE_OFFLOAD_REQUIRED` carrying an `offloadImages` count so `dsh-compaction-image-offload` can record a durable `image/offload` decision and retry. Occurrences the host marked `offloaded` are sent as fixed placeholder text; the adapter never drops an image itself.
+- Settings moved to the Harness `0.2.0` entry-ownership model: the namespace is the profile entry id `llm-grok`, the form derives from this plugin's `Config` (`webSearch` / `xSearch` are marked `.volatile()`), and the plugin declares its own page with `ctx.settings.configure({ auto: false }, ctx.fiber)`.
+- The browser page moved from `settingsScope` to the settings domain's shared `configForms`; switch reads and writes, the fail-closed read-only/unavailable states, and unload cleanup keep their existing semantics.
+- Required and optional peers plus development dependencies align with `0.2.0-rc.2` (Cordis `4.0.4`, Schemastery `3.18.4`), and `dsh.client.inject` gains `@deepseek-ai/dsh-client-ui-slots`.
+- Authentication, the model catalog, the Responses codec, the Search protocol, partial-output preservation, and the `/grok` command keep their existing boundaries. This version completed local load verification against a 0.2.0 package tree and static regressions; it did not repeat a real-account generation, and it is not Windows real-device acceptance.
+
 ### `1.0.6` fix boundary
 
 - Fix the pre-network `UNSUPPORTED_CONTENT` failure caused when DSH normalizes transparent image attachments to `image/webp`.
@@ -198,17 +248,17 @@ Directory inclusion is not an endorsement by xAI or DeepSeek Harness. [Listing P
 - Two-layer redacted real-account verification passed against the final source: raw Web/X probes each completed one 64-event response, observed the requested Search kind, and reached `completed`; the production adapter completed 5 Responses calls, with direct Web/X both ending in `stop` and a Harness-shaped local `x_search` call/result continuation ending `tool-calls`, `tool-calls`, then `stop`, with one local call in each of the first two turns. That continuation did not place a Harness `x_search` function definition beside an xAI `{ type: "x_search" }` server descriptor in the same wire request; `1.0.1` later isolated that combination as an HTTP 400 conflict. No results, URLs, prompts, identity, or credentials were retained; this is not publication, OAuth, or real-device Windows evidence.
 - The manifest and lockfile are synchronized at `1.0.0`; the Node 24 suite reports 245 tests, 243 pass, 0 fail, and 2 platform skips. Production audit reports zero vulnerabilities, and the deterministic build/bundle comparison, 72-entry dry-run pack, secret scan, and diff check pass. Code PR #28, main CI run [`33308371009`](https://github.com/yoshino-xiao7/dsh-grok-provider/actions/runs/33308371009), the final release commit, dual-platform final CI, unique artifact, exact authorization, and Registry/signature/attestation/provenance readback are complete.
 
-| Item | `1.0.6` compatibility boundary |
+| Item | `2.1.0` compatibility boundary |
 | --- | --- |
-| DeepSeek Harness | Exact support for `0.1.5-rc.2` |
+| DeepSeek Harness | Supports the `0.2.0` line (`^0.2.0-rc.1 \|\| ^0.2.0-rc.2`); `0.1.x` is no longer supported |
 | Node.js | `>=24.19.0` |
-| macOS arm64 | Image sending has real-Harness confirmation; `1.0.5` validates account RPC on `0.1.5-rc.2` |
+| macOS arm64 | Real-Harness image confirmation comes from `1.0.6` (`0.1.5-rc.2`); `2.1.0` completed load and regression checks against a local 0.2.0 package tree |
 | Windows x64 | The code path and existing slow fakes are unchanged. On a reachable network the official CLI generates the URL and opens the browser, and that path still lacks real-device Windows acceptance |
 | macOS x64 / Linux | Unsupported |
 | Grok CLI | No full-version lock; official path, `login --oauth` capability, and production OIDC credential contract are enforced |
 | Models | Every account catalog model whose backend has a strict codec in this release |
 
-`1.0.6` preserves the published image boundary: image input is enabled only for exact `grok-4.6`, while `grok-4.5` and every other dynamically discovered model remain text-only. Images must be verified JPEG/PNG/WebP projections from the Harness attachment service; WebP is converted to Grok-compatible PNG/JPEG before sending. Ordinary user content and images nested one level inside a tool result are supported with fixed `detail:"high"`; URLs, filesystem paths, file IDs, and caller-supplied data URLs are rejected. Private reasoning in ordinary user/system history is omitted while adjacent visible text remains ordered.
+`2.1.0` preserves the published image boundary: image input is enabled only for exact `grok-4.6`, while `grok-4.5` and every other dynamically discovered model remain text-only. Images must be verified JPEG/PNG/WebP projections from the Harness attachment service; WebP is converted to Grok-compatible PNG/JPEG before sending. Ordinary user content and images nested one level inside a tool result are supported with fixed `detail:"high"`; URLs, filesystem paths, file IDs, and caller-supplied data URLs are rejected. Private reasoning in ordinary user/system history is omitted while adjacent visible text remains ordered. Budgets are measured in base64-represented bytes and share their constants with the `16 MiB` serialized-request ceiling; the occurrence limit is decided by counting before any attachment byte is read, so images that must be offloaded purely by count cost no extra reads.
 
 Each projected image is limited to 4 MiB, 16,777,216 pixels, and 8192px per side. A request retains at most eight images and 8 MiB of projected image bytes. When a limit is exceeded, the globally oldest images are offloaded to Harness text placeholders; the final JSON remains capped at 16 MiB.
 

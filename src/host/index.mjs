@@ -26,14 +26,20 @@ import { createOfficialAuthDriver } from "../internal/official-auth-driver.mjs"
 import { verifyOfficialCliExecutable } from "../internal/official-cli-verifier.mjs"
 import { installProviderRuntime } from "../internal/provider-runtime.mjs"
 import { createRuntimeDiagnostics } from "../internal/runtime-diagnostics.mjs"
+import { createNetworkRoute } from "../internal/network-proxy.mjs"
 
 export const name = "llm-grok"
 export const inject = ["llm"]
-const SETTINGS_NAMESPACE = "llm-grok"
+/** cosmokit's shared live-config reference protocol, read without importing the package. */
+const VOLATILE_WRITE = Symbol.for("cosmokit.volatile.write")
 
 export const Config = Schema.object({
-  webSearch: Schema.boolean().default(false).description("Allow xAI Web Search for regular Grok requests"),
-  xSearch: Schema.boolean().default(false).description("Allow xAI X Search for regular Grok requests"),
+  webSearch: Schema.boolean().default(false).description("Allow xAI Web Search for regular Grok requests").volatile(),
+  xSearch: Schema.boolean().default(false).description("Allow xAI X Search for regular Grok requests").volatile(),
+  proxyEnabled: Schema.boolean().default(true)
+    .description("Route Grok requests through the HTTP proxy below").volatile(),
+  proxyUrl: Schema.string().default("http://127.0.0.1:7897")
+    .description("HTTP proxy address used for Grok requests").volatile(),
 })
 
 export function apply(ctx, config) {
@@ -42,7 +48,29 @@ export function apply(ctx, config) {
     throw new TypeError("dsh-grok-provider supports macOS and Windows")
   }
 
-  let currentConfig = () => config
+  // Harness 0.2.0 owns settings by Loader entry: the profile entry id
+  // (`llm-grok`) IS the namespace, the form derives from this Config, and a
+  // configuration write reaches this plugin through the normal Loader path.
+  // `configure({ auto: false })` states that the browser page lives in this
+  // package instead of an auto-generated form.
+  const currentConfig = () => ({
+    webSearch: readLiveValue(config?.webSearch),
+    xSearch: readLiveValue(config?.xSearch),
+  })
+  // Harness 0.2.0 routes outbound HTTP through a process-wide dispatcher the
+  // launcher installs from the launch environment, which covers hosts that carry
+  // HTTP_PROXY/HTTPS_PROXY. A machine whose only proxy is application-local (the
+  // desktop app started from a plain shortcut, for example) has nothing to read,
+  // so this plugin offers its own operator-set route for its own requests only.
+  const networkRoute = createNetworkRoute({
+    baseFetch: globalThis.fetch,
+    readProxyConfig: () => ({
+      enabled: readLiveValue(config?.proxyEnabled) !== false,
+      url: readLiveValue(config?.proxyUrl),
+    }),
+    env: process.env,
+  })
+  ctx.effect(() => () => networkRoute.dispose(), "llm-grok network route")
 
   const homeDir = os.homedir()
   let refreshOfficialCredential
@@ -64,7 +92,7 @@ export function apply(ctx, config) {
     officialSource,
     createTransport: (credentialSource) => createGrokTransport({
       credentialSource,
-      fetch: globalThis.fetch,
+      fetch: networkRoute.fetch,
       attributionHeaders,
       clientIdentifier: "dsh-grok-provider",
       clientVersion: "1.0.5",
@@ -83,12 +111,10 @@ export function apply(ctx, config) {
     }),
   })
   ctx.inject(["settings"], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, SETTINGS_NAMESPACE, Config, config, {
-      setSource(source) {
-        currentConfig = source
-      },
-      onChange() {},
-    })
+    settingsCtx.effect(
+      () => settingsCtx.settings.configure({ auto: false }, ctx.fiber),
+      "llm-grok settings presentation",
+    )
   })
   const authController = createAuthController({
     registry: runtime.auth,
@@ -103,6 +129,7 @@ export function apply(ctx, config) {
   const runtimeDiagnostics = createRuntimeDiagnostics({
     pluginVersion: packageJson.version,
     getCliInspector: () => inspectOfficialCli,
+    getNetworkState: () => networkRoute.state(),
   })
   const authRpcHandler = createAuthRpcHandler({
     controller: authController,
@@ -166,4 +193,22 @@ export function apply(ctx, config) {
   })
 
   ctx.effect(() => () => runtime.dispose(), "llm-grok runtime")
+}
+
+/**
+ * Read one live Config field. A `.volatile()` field is projected as a cosmokit
+ * live reference whose current value is read at call time, so a settings write
+ * reaches later calls without re-reading the profile; a plain value is accepted
+ * unchanged for compositions that validate without the volatile projection.
+ * @param value - validated Config field.
+ * @returns the current field value.
+ */
+function readLiveValue(value) {
+  if (
+    typeof value === "object" && value !== null &&
+    VOLATILE_WRITE in value && typeof value.get === "function"
+  ) {
+    return value.get()
+  }
+  return value
 }

@@ -3,7 +3,9 @@ import { createHash } from "node:crypto"
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const MAX_CALL_ID_BYTES = 1024
 const MAX_TEXT_LENGTH = 8 * 1024 * 1024
-const MAX_REQUEST_BYTES = 16 * 1024 * 1024
+/** Hard upper bound on one serialized Grok Responses request. Exported so the
+ * image budget can be derived from the exact same ceiling the encoder enforces. */
+export const MAX_RESPONSES_REQUEST_BYTES = 16 * 1024 * 1024
 const MAX_MESSAGES = 10_000
 const MAX_TOOLS = 128
 const EMPTY_SERVER_TOOLS = Object.freeze([])
@@ -114,15 +116,25 @@ function assembleRequest(state, input) {
 }
 
 function requireRequestFits(request) {
+  if (measureResponsesRequestBytes(request) > MAX_RESPONSES_REQUEST_BYTES) {
+    throw new ResponsesRequestTooLargeError()
+  }
+}
+
+/**
+ * Exact UTF-8 byte length of one assembled request as it goes on the wire.
+ * @param request - assembled request object.
+ * @returns serialized byte length.
+ * @throws {UnsupportedResponsesRequestError} when the request cannot be serialized.
+ */
+export function measureResponsesRequestBytes(request) {
   let serialized
   try {
     serialized = JSON.stringify(request)
   } catch {
     throw new UnsupportedResponsesRequestError()
   }
-  if (Buffer.byteLength(serialized, "utf8") > MAX_REQUEST_BYTES) {
-    throw new ResponsesRequestTooLargeError()
-  }
+  return Buffer.byteLength(serialized, "utf8")
 }
 
 function freezeTree(value) {
@@ -462,9 +474,15 @@ function captureContent(content, depth, budget) {
         text: readOwnDataProperty(block, "text"),
       })
     } else if (type === "image") {
+      // The Host's durable image-offload decision must survive capture: the
+      // request compiler replaces these occurrences with placeholder text
+      // instead of sending image bytes the Host asked to omit.
+      const offloaded = readOwnDataProperty(block, "offloaded")
+      if (offloaded !== undefined && typeof offloaded !== "boolean") fail()
       snapshots[index] = Object.freeze({
         type,
         attachment: readOwnDataProperty(block, "attachment"),
+        ...(offloaded === true ? { offloaded: true } : {}),
       })
     } else if (type === "tool-call") {
       snapshots[index] = Object.freeze({

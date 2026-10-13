@@ -15,6 +15,7 @@ test("the browser bundle registers one localized loopback-only Grok settings sec
       "@deepseek-ai/dsh-client-locale",
       "@deepseek-ai/dsh-client-ui-renderer",
       "@deepseek-ai/dsh-client-ui-settings",
+      "@deepseek-ai/dsh-client-ui-slots",
     ],
     platform: "web",
   })
@@ -32,7 +33,8 @@ test("the browser bundle registers one localized loopback-only Grok settings sec
   assert.match(source, /使用额度/u)
   assert.match(source, /当前账号可用的模型/u)
   assert.match(source, /call\("dashboard"\)/u)
-  assert.match(source, /settingsScope\.bind\(\{ namespace: "llm-grok", decode:/u)
+  assert.match(source, /ctx\.configForms\.get\("llm-grok"\)/u)
+  assert.doesNotMatch(source, /settingsScope\.bind/u)
   assert.doesNotMatch(source, /localStorage/u)
   assert.doesNotMatch(source, /userId|user_id|subscriptionTier|prepaidBalance/u)
   vm.runInNewContext(source, {
@@ -56,7 +58,7 @@ test("the browser bundle registers one localized loopback-only Grok settings sec
     assert.equal(id, "react")
     return React
   })
-  assert.deepEqual(Array.from(plugin.inject), ["slots", "locale", "connection", "settingsScope"])
+  assert.deepEqual(Array.from(plugin.inject), ["slots", "locale", "connection", "configForms"])
 
   const registrations = []
   const dictionaries = []
@@ -75,7 +77,7 @@ test("the browser bundle registers one localized loopback-only Grok settings sec
       },
       register(options, component) { registrations.push({ options, component }) },
     },
-    settingsScope: searchHarness.service,
+    configForms: searchHarness.service,
   }
   plugin.apply(ctx)
 
@@ -86,12 +88,9 @@ test("the browser bundle registers one localized loopback-only Grok settings sec
   assert.equal(registrations[0].options.name, "settings.section")
   assert.equal(registrations[0].options.id, "grok-auth")
   assert.equal(typeof registrations[0].component, "function")
-  assert.equal(searchHarness.binding.namespace, "llm-grok")
-  const decoded = searchHarness.binding.decode({ webSearch: true, xSearch: false, futureSetting: true })
-  assert.deepEqual({ ...decoded }, { webSearch: true, xSearch: false })
-  assert.equal(Object.isFrozen(decoded), true)
-  assert.equal(searchHarness.binding.decode({ webSearch: true, xSearch: "false" }), undefined)
-  assert.equal(registrations[0].options.inject().searchSettings, searchHarness.scope)
+  assert.equal(searchHarness.entryId, "llm-grok")
+  assert.equal(searchHarness.disposed, false)
+  assert.equal(registrations[0].options.inject().pluginSettings, searchHarness.scope)
 })
 
 test("the browser bundle replaces only the Grok settings nav gear and cleans up on unload", async () => {
@@ -209,7 +208,7 @@ test("the browser bundle replaces only the Grok settings nav gear and cleans up 
         inject(_name, callback) { callback() },
         register() { return () => {} },
       },
-      settingsScope: searchHarness.service,
+      configForms: searchHarness.service,
     })
     return effects
   }
@@ -403,13 +402,13 @@ test("the model grid renders an image badge only for image-capable models", asyn
       inject(_name, callback) { callback() },
       register(_options, component) { registrations.push(component) },
     },
-    settingsScope: searchHarness.service,
+    configForms: searchHarness.service,
   })
 
   const tree = registrations[0]({
     connection: { isLoopback: true, rpc: { call() {} } },
     t: (key) => key,
-    searchSettings: searchHarness.scope,
+    pluginSettings: searchHarness.scope,
   })
   const cards = findElements(tree, (node) => node.props.className === "dsh-grok-model")
   assert.equal(cards.length, 2)
@@ -442,7 +441,7 @@ test("the settings page gives bilingual near-use disclosure for both remote Sear
     const content = textContent(fixture.tree)
     for (const assertion of expectations.assertions) assert.match(content, assertion)
 
-    const switches = findElements(fixture.tree, (node) => node.props.role === "switch")
+    const switches = searchSwitches(fixture.tree)
     assert.equal(switches.length, 2)
     assert.deepEqual(switches.map((control) => control.props["aria-checked"]), [false, false])
     assert.deepEqual(switches.map((control) => control.props.disabled), [false, false])
@@ -525,13 +524,119 @@ test("Search controls fail closed while settings are loading, unavailable, or re
       diagnostics: { pluginVersion: "0.1.10", cli: { state: "ready", version: "1.0.5" } },
       searchSnapshot: fixtureCase.snapshot,
     })
-    const switches = findElements(fixture.tree, (node) => node.props.role === "switch")
+    const switches = searchSwitches(fixture.tree)
     assert.equal(switches.length, 2)
     assert.deepEqual(switches.map((control) => control.props["aria-checked"]), fixtureCase.checked)
     assert.deepEqual(switches.map((control) => control.props.disabled), [true, true])
     assert.equal(textContent(fixture.tree).includes(fixture.dictionaries.en[fixtureCase.message]), true)
     await switches[0].props.onClick()
     assert.deepEqual(fixture.searchHarness.writes, [])
+
+    // The proxy controls share the same fail-closed rule.
+    const proxySwitch = findElements(fixture.tree, (node) => node.props?.["data-field"] === "proxyEnabled")[0]
+    assert.equal(proxySwitch.props.disabled, true)
+    await proxySwitch.props.onClick()
+    assert.deepEqual(fixture.searchHarness.writes, [])
+  }
+})
+
+test("the settings page configures the outbound proxy and reports the live route", async () => {
+  const writes = []
+  const harness = await createSettingsLifecycleHarness({
+    searchHarness: createSearchSettingsHarness({
+      snapshot: {
+        status: "ready",
+        value: Object.freeze({
+          webSearch: false,
+          xSearch: false,
+          proxyEnabled: true,
+          proxyUrl: "http://127.0.0.1:7897",
+        }),
+        writable: true,
+      },
+      onSet(field, value) {
+        writes.push({ field, value })
+        return true
+      },
+    }),
+    async rpc(endpoint) {
+      if (endpoint === "status") return { kind: "status", status: { generation: 1, available: false, driver: true } }
+      if (endpoint === "diagnostics") {
+        return {
+          kind: "diagnostics",
+          diagnostics: { pluginVersion: "2.1.0", cli: { state: "ready", version: "1.0.5" }, network: "proxy" },
+        }
+      }
+      if (endpoint === "dashboard") return { kind: "dashboard", dashboard: undefined }
+      throw new Error(`Unexpected Grok auth RPC endpoint: ${endpoint}`)
+    },
+  })
+  const findProxySwitch = () => findElements(harness.tree(), (node) => node.props?.["data-field"] === "proxyEnabled")[0]
+  const findProxyInput = () => findElements(harness.tree(), (node) => node.type === "input")[0]
+  const findProxySave = () => findElements(harness.tree(), (node) => (
+    node.type === "button" && textContent(node) === harness.dictionaries.en.proxySave
+  ))[0]
+
+  assert.equal(findProxySwitch().props["aria-checked"], true)
+  assert.equal(findProxySwitch().props.disabled, false)
+  assert.equal(findProxyInput().props.value, "http://127.0.0.1:7897")
+  assert.match(textContent(harness.tree()), /Current network: through http:\/\/127\.0\.0\.1:7897/u)
+  assert.match(textContent(harness.tree()), /only HTTP\(S\)_PROXY environment variables/u)
+
+  await findProxySwitch().props.onClick()
+  await harness.flush()
+  assert.deepEqual(writes, [{ field: "proxyEnabled", value: false }])
+  assert.equal(findProxySwitch().props["aria-checked"], false)
+
+  // A save is offered only once the address actually differs from the Host value.
+  assert.equal(findProxySave().props.disabled, true)
+  findProxyInput().props.onChange({ target: { value: "  http://10.0.0.5:3128  " } })
+  await harness.flush()
+  assert.equal(findProxySave().props.disabled, false)
+  await findProxySave().props.onClick()
+  await harness.flush()
+  assert.deepEqual(writes[1], { field: "proxyUrl", value: "http://10.0.0.5:3128" })
+  assert.equal(findProxyInput().props.value, "http://10.0.0.5:3128")
+  assert.equal(textContent(harness.tree()).includes(harness.dictionaries.en.proxySaveFailed), false)
+
+  // An obviously unusable address is refused by the page and never written.
+  findProxyInput().props.onChange({ target: { value: "7897" } })
+  await harness.flush()
+  await findProxySave().props.onClick()
+  await harness.flush()
+  assert.equal(writes.length, 2)
+  assert.equal(textContent(harness.tree()).includes(harness.dictionaries.en.proxySaveFailed), true)
+})
+
+test("the proxy panel names the route the Host actually resolved", async () => {
+  const cases = [
+    { network: "proxy", expected: "networkProxy" },
+    { network: "environment", expected: "networkEnvironment" },
+    { network: "proxy-unavailable", expected: "networkProxyUnavailable" },
+    { network: "proxy-invalid", expected: "networkProxyInvalid" },
+    { network: "disabled", expected: "networkDisabled" },
+  ]
+
+  for (const fixtureCase of cases) {
+    const fixture = await renderSettingsPage({
+      locale: "en",
+      status: { generation: 1, available: false, driver: true },
+      diagnostics: { pluginVersion: "2.1.0", cli: { state: "ready", version: "1.0.5" }, network: fixtureCase.network },
+      searchSnapshot: {
+        status: "ready",
+        value: Object.freeze({
+          webSearch: false,
+          xSearch: false,
+          proxyEnabled: true,
+          proxyUrl: "http://127.0.0.1:7897",
+        }),
+        writable: true,
+      },
+    })
+
+    const content = textContent(fixture.tree)
+    assert.equal(content.includes(fixture.dictionaries.en[fixtureCase.expected]), true, fixtureCase.network)
+    assert.match(content, /Current network:/u)
   }
 })
 
@@ -1000,13 +1105,13 @@ async function renderSettingsPage({
       inject(_name, callback) { callback() },
       register(_options, component) { registrations.push(component) },
     },
-    settingsScope: searchHarness.service,
+    configForms: searchHarness.service,
   })
   const render = () => {
     hookIndex = 0
     return registrations[0]({
       connection,
-      searchSettings: searchHarness.scope,
+      pluginSettings: searchHarness.scope,
       t: (key) => dictionaries[locale][key],
     })
   }
@@ -1139,7 +1244,7 @@ async function createSettingsLifecycleHarness({ rpc, searchHarness = createSearc
       inject(_name, callback) { callback() },
       register(_options, component) { registrations.push(component) },
     },
-    settingsScope: searchHarness.service,
+    configForms: searchHarness.service,
   })
 
   const render = () => {
@@ -1147,7 +1252,7 @@ async function createSettingsLifecycleHarness({ rpc, searchHarness = createSearc
     dirty = false
     currentTree = registrations[0]({
       connection,
-      searchSettings: searchHarness.scope,
+      pluginSettings: searchHarness.scope,
       t: (key) => dictionaries.en[key],
     })
     const effects = pendingEffects.splice(0)
@@ -1200,7 +1305,8 @@ function createSearchSettingsHarness({
   onSet,
 } = {}) {
   let current = snapshot
-  let binding
+  let entryId
+  let disposed = false
   const listeners = new Set()
   const writes = []
   const publish = (next) => {
@@ -1223,14 +1329,19 @@ function createSearchSettingsHarness({
         value: Object.freeze({ ...current.value, [field]: value }),
       })
     },
+    async dispose() {
+      disposed = true
+      listeners.clear()
+    },
   }
   return {
-    get binding() { return binding },
+    get disposed() { return disposed },
+    get entryId() { return entryId },
     publish,
     scope,
     service: {
-      bind(options) {
-        binding = options
+      get(id) {
+        entryId = id
         return scope
       },
     },
@@ -1242,6 +1353,14 @@ function deferred() {
   let resolve
   const promise = new Promise((resolvePromise) => { resolve = resolvePromise })
   return { promise, resolve }
+}
+
+/** The two remote-Search switches; the network-proxy toggle has its own panel and field name. */
+function searchSwitches(tree) {
+  return findElements(tree, (node) => (
+    node.props?.role === "switch" &&
+    (node.props["data-field"] === "webSearch" || node.props["data-field"] === "xSearch")
+  ))
 }
 
 function findElements(value, predicate) {

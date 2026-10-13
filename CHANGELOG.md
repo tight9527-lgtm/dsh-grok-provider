@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.1.0 - 2026-10-13
+
+- Add a settings-page outbound proxy. Node's `fetch` reads neither the Windows system proxy nor any application setting, only the `HTTP_PROXY`/`HTTPS_PROXY` family, so a host started from an ordinary shortcut on a machine that reaches the internet through a local Clash proxy could sign in (the official CLI resolves the proxy itself) while the model catalog and quota stayed unavailable. Two new `Config` fields, `proxyEnabled` (default `true`) and `proxyUrl` (default `http://127.0.0.1:7897`), are editable at runtime through the same `configForms` controller as the Search switches, so no restart, no environment edit and no new RPC are needed.
+- Scope the route to this plugin: each request resolves its route once and, when a proxy applies, sends it with an `undici` `ProxyAgent` as that request's own dispatcher. The plugin never calls `setGlobalDispatcher`, so the host process, other plugins and all other traffic keep the route they had.
+- Keep the Harness policy authoritative: when the launch environment already carries `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY`, the launcher's dispatcher wins and the plugin layers nothing on top. Only a parseable `http:`/`https:` URL without credentials is accepted; anything else routes directly as `proxy-invalid`.
+- Fall back only from a local proxy. A loopback target (`127.0.0.1`, `localhost`, `::1`) is judged by one bounded TCP probe: an unlistening proxy routes directly and the page says so, a successful probe is cached for 30 s and invalidated at once if a proxied request then fails at connect level. A non-local target is never probed and never bypassed, so an unreachable remote proxy fails closed instead of sending traffic around it.
+- Report the resolved route without the address: the `diagnostics` outcome gains the closed `network` field (`environment`, `disabled`, `proxy`, `proxy-unavailable`, `proxy-invalid`), and the settings page names it next to the address it shows from its own config form.
+- Add the runtime dependency `undici ^8.10.0`, the same library the Harness uses in `@deepseek-ai/dsh-http-proxy`; it carries no native code.
+- Local gate: 297 tests, 295 pass, 0 fail, 2 platform skips on Node `24.21.0`. Design and evidence: [ADR-0014](docs/adr/0014-plugin-scoped-outbound-proxy.md).
+
+## 2.0.1 - 2026-10-13
+
+- Port to DeepSeek Harness `0.2.0-rc.2`. The `1.0.x` line cannot load on that host: `@deepseek-ai/dsh-llm` removed the named export `offloadRequestImagesWithPolicy`, so the Host entry failed at ESM link time before `apply` ever ran. Peer and development dependencies move to `0.2.0-rc.2` (Cordis `^4.0.4`, Schemastery `^3.18.4`); Harness `0.1.x` is no longer supported.
+- Replace the removed settings integration with Harness `0.2.0` entry ownership: the namespace is the profile entry id `llm-grok`, the form projects from this package's `Config`, both Search switches are declared `.volatile()` and read through their live reference at call time, and the plugin declares `ctx.settings.configure({ auto: false }, ctx.fiber)` instead of registering a section through the deleted `installSection`.
+- Move the image path to the Harness `0.2.0` host-decision protocol: the route declares a base64-represented occurrence/byte budget shared with the `16 MiB` serialized ceiling, exceeding it fails with `IMAGE_OFFLOAD_REQUIRED` and `offloadImages` so `dsh-compaction-image-offload` records a durable `image/offload` decision, and occurrences the Host marked `offloaded` are sent as placeholder text. The occurrence limit is decided before any attachment read, and the adapter no longer drops retained images itself.
+- Migrate the browser settings page from the deleted `settingsScope` service to the settings domain's shared `configForms`, keeping the ready/writable/read-only fail-closed semantics, the serialized write guard, and effect-owned disposal. Add `@deepseek-ai/dsh-client-ui-slots` to `dsh.client.inject`.
+- Preserve the `offloaded` mark through both capture layers and cover the retried request with regressions: occurrence-only refusal before reads, aggregate-byte refusal after bounded reads, placeholder projection for exactly the offloaded occurrences, the serialized request ceiling, and a nested-only occurrence overflow that the Host cannot repair.
+- Local gate: 284 tests, 282 pass, 0 fail, 2 platform skips on Node `24.21.0` against the installed 0.2.0-rc.2 package set. Design and evidence: [ADR-0013](docs/adr/0013-dsh-0.2.0-settings-and-image-offload.md); contract: [`docs/04-harness-contract.md`](docs/04-harness-contract.md). No live account generation, no Windows real-device sign-in, and no publication were performed for this version.
+
 ## 1.0.6 - 2026-09-18
 
 - Fix `UNSUPPORTED_CONTENT` before the network request when DSH normalizes transparent attachments to `image/webp`.

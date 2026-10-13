@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  ImageOffloadRequiredError,
   InvalidRequestImageProjectionError,
   UnsupportedImageInputError,
   UnsupportedSearchCapabilityError,
@@ -750,7 +751,7 @@ test("tool-result reasoning with an image remains a generic invalid request", as
   assert.equal(attachmentLookups, 0)
 })
 
-test("the request compiler removes the oldest image until the final JSON fits 16 MiB", async () => {
+test("the request compiler asks the Host to offload the oldest images until the final JSON fits 16 MiB", async () => {
   const data = Buffer.alloc(2 * 1024 * 1024)
   data.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
   const oldest = imageRef({
@@ -783,8 +784,7 @@ test("the request compiler removes the oldest image until the final JSON fits 16
       },
     }),
   })
-
-  const request = await compileRequest(compiler, {
+  const options = {
     provider: "grok",
     model: "grok-4.6",
     messages: [
@@ -813,13 +813,33 @@ test("the request compiler removes the oldest image until the final JSON fits 16
         content: [{ type: "image", attachment: newest }],
       },
     ],
+  }
+
+  // Two base64 payloads plus the surrounding text cannot fit the serialized
+  // ceiling, so the route names how many oldest occurrences the Host must
+  // omit rather than dropping them itself.
+  await assert.rejects(compileRequest(compiler, options, imageRoute()), (error) => (
+    error instanceof ImageOffloadRequiredError && error.offloadImages === 2
+  ))
+
+  // The Host records that decision durably; the retried request sends
+  // placeholders for exactly those occurrences.
+  const request = await compileRequest(compiler, {
+    ...options,
+    messages: options.messages.map((message, index) => index < 2
+      ? {
+        ...message,
+        content: message.content.map((block) => (
+          block.type === "image" ? { ...block, offloaded: true } : block
+        )),
+      }
+      : message),
   }, imageRoute())
 
-  assert.equal(request.input[0].role, "user")
-  assert.match(request.input[0].content, /^\[image omitted to fit request image limits/u)
-  assert.match(request.input[1].content, /^\[image omitted to fit request image limits/u)
-  assert.equal(request.input[2].content[0].type, "input_image")
-  assert.ok(Buffer.byteLength(JSON.stringify(request), "utf8") <= 16 * 1024 * 1024)
+  const serialized = JSON.stringify(request)
+  assert.equal((serialized.match(/"type":"input_image"/gu) ?? []).length, 1)
+  assert.match(serialized, /image omitted to fit request image limits/u)
+  assert.ok(Buffer.byteLength(serialized, "utf8") <= 16 * 1024 * 1024)
 })
 
 test("an already-aborted image request stops before resolving attachment storage", async () => {
@@ -1381,7 +1401,7 @@ test("conflicting metadata for one attachment id fails before resolving storage"
   assert.equal(lookups, 0)
 })
 
-test("a ninth image offloads the oldest occurrence before attachment reads", async () => {
+test("a ninth image asks the Host to offload the oldest occurrence before any attachment read", async () => {
   const data = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
     "base64",
@@ -1410,8 +1430,7 @@ test("a ninth image offloads the oldest occurrence before attachment reads", asy
       },
     }),
   })
-
-  const request = await compileRequest(compiler, {
+  const options = {
     provider: "grok",
     model: "grok-4.6",
     messages: [{
@@ -1420,15 +1439,31 @@ test("a ninth image offloads the oldest occurrence before attachment reads", asy
       source: { kind: "user" },
       content: attachments.map((attachment) => ({ type: "image", attachment })),
     }],
+  }
+
+  // The occurrence limit needs no bytes: a request over it is refused before
+  // the adapter reads a single attachment.
+  await assert.rejects(compileRequest(compiler, options, imageRoute()), (error) => (
+    error instanceof ImageOffloadRequiredError && error.offloadImages === 1
+  ))
+  assert.equal(reads.length, 0)
+
+  const request = await compileRequest(compiler, {
+    ...options,
+    messages: options.messages.map((message) => ({
+      ...message,
+      content: message.content.map((block, index) => (
+        index === 0 ? { ...block, offloaded: true } : block
+      )),
+    })),
   }, imageRoute())
 
-  assert.equal(reads.length, 8)
-  assert.equal(reads.includes(attachments[0].attachmentId), false)
+  assert.deepEqual(reads, attachments.slice(1).map((attachment) => attachment.attachmentId))
   assert.equal(request.input[0].content[0].type, "input_text")
   assert.equal(request.input[0].content.filter((block) => block.type === "input_image").length, 8)
 })
 
-test("aggregate projected bytes offload the oldest image after bounded reads", async () => {
+test("aggregate projected bytes ask the Host to offload the oldest image after bounded reads", async () => {
   const data = Buffer.alloc(3 * 1024 * 1024)
   data.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
   const attachments = Array.from({ length: 3 }, (_, index) => imageRef({
@@ -1455,8 +1490,7 @@ test("aggregate projected bytes offload the oldest image after bounded reads", a
       },
     }),
   })
-
-  const request = await compileRequest(compiler, {
+  const options = {
     provider: "grok",
     model: "grok-4.6",
     messages: [{
@@ -1465,12 +1499,90 @@ test("aggregate projected bytes offload the oldest image after bounded reads", a
       source: { kind: "user" },
       content: attachments.map((attachment) => ({ type: "image", attachment })),
     }],
+  }
+
+  // Three base64 payloads exceed the route byte budget, so exactly the oldest
+  // occurrence is named for durable offload after the three bounded reads.
+  await assert.rejects(compileRequest(compiler, options, imageRoute()), (error) => (
+    error instanceof ImageOffloadRequiredError && error.offloadImages === 1
+  ))
+  assert.equal(reads, 3)
+
+  const request = await compileRequest(compiler, {
+    ...options,
+    messages: options.messages.map((message) => ({
+      ...message,
+      content: message.content.map((block, index) => (
+        index === 0 ? { ...block, offloaded: true } : block
+      )),
+    })),
   }, imageRoute())
 
-  assert.equal(reads, 3)
   assert.equal(request.input[0].content[0].type, "input_text")
   assert.equal(request.input[0].content.filter((block) => block.type === "input_image").length, 2)
   assert.ok(Buffer.byteLength(JSON.stringify(request), "utf8") <= 16 * 1024 * 1024)
+})
+
+test("a nested-only occurrence overflow fails closed because the Host cannot offload it", async () => {
+  const data = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  )
+  const attachments = Array.from({ length: 9 }, (_, index) => imageRef({
+    attachmentId: `sha256:${String(index + 30).padStart(64, "0")}`,
+    bytes: data.byteLength,
+  }))
+  let reads = 0
+  const compiler = createResponsesRequestCompiler({
+    getAttachmentStore: () => ({
+      async readImageRequest(ref) {
+        reads += 1
+        return {
+          variantId: `fixture:${ref.attachmentId}`,
+          attachment: ref,
+          data,
+          mediaType: "image/png",
+          bytes: data.byteLength,
+          width: 1,
+          height: 1,
+          depth: "uchar",
+          space: "srgb",
+          hasAlpha: true,
+        }
+      },
+    }),
+  })
+
+  // Eight top-level occurrences plus one image nested in a tool result exceed
+  // the route's occurrence limit, but the Host's durable offload walker only
+  // selects top-level occurrences. No count could therefore ever satisfy the
+  // budget, so the request is refused instead of being sent oversized.
+  await assert.rejects(compileRequest(compiler, {
+    provider: "grok",
+    model: "grok-4.6",
+    messages: [
+      {
+        id: "user-eight",
+        role: "user",
+        source: { kind: "user" },
+        content: attachments.slice(0, 8).map((attachment) => ({ type: "image", attachment })),
+      },
+      {
+        id: "tool-one",
+        role: "user",
+        source: { kind: "tool", callId: "outer" },
+        content: [{
+          type: "tool-result",
+          toolCallId: "outer",
+          content: [{ type: "image", attachment: attachments[8] }],
+        }],
+      },
+    ],
+  }, imageRoute()), (error) => (
+    error?.name === "UnsupportedResponsesRequestError" &&
+    !(error instanceof ImageOffloadRequiredError)
+  ))
+  assert.equal(reads, 9)
 })
 
 test("unsupported nested tool-result structure fails before reading attachments", async () => {

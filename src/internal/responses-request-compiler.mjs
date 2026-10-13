@@ -1,15 +1,21 @@
-import { offloadRequestImagesWithPolicy, offloadedImageText } from "@deepseek-ai/dsh-llm"
+import { offloadedImageText, requiredImageOffload } from "@deepseek-ai/dsh-llm"
 
 import { transcodeRequestImage } from "./image-transcoder.mjs"
 import {
-  ResponsesRequestTooLargeError,
+  MAX_RESPONSES_REQUEST_BYTES,
   UnsupportedResponsesRequestError,
   captureResponsesRequestMessages,
   captureResponsesRequestOptions,
   createResponsesRequestEncoder,
+  measureResponsesRequestBytes,
 } from "./responses-request.mjs"
 
 const MAX_CONTENT_BLOCKS = 20_000
+/**
+ * Slack kept below the serialized request ceiling when deriving the image
+ * budget, so base64 expansion rounding can never push a request over it.
+ */
+const REQUEST_BYTES_SAFETY_MARGIN = 4 * 1024
 const FUNCTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const SEARCH_MODEL_ID = "grok-4.6"
 const CAPTURE_IMAGE_POLICY = Object.freeze({
@@ -44,6 +50,19 @@ export class InvalidRequestImageProjectionError extends Error {
   constructor() {
     super("The attachment service returned an invalid request image projection")
     this.name = "InvalidRequestImageProjectionError"
+  }
+}
+
+/**
+ * One image request that exceeds its route budget and must be retried after the
+ * Host records a durable image-offload decision. The Harness maps this to
+ * `IMAGE_OFFLOAD_REQUIRED`; the adapter never drops a retained image itself.
+ */
+export class ImageOffloadRequiredError extends Error {
+  constructor(offloadImages) {
+    super("The Grok request carries more retained images than its route budget accepts")
+    this.name = "ImageOffloadRequiredError"
+    this.offloadImages = offloadImages
   }
 }
 
@@ -101,7 +120,9 @@ export function createResponsesRequestCompiler({
     const imageMessages = snapshotImageRequestMessages(messages, model)
     const blocks = collectImageBlocks(imageMessages)
     const refs = indexUniqueImageRefs(blocks)
-    encodeRequest({ messages: imageMessages, requestImages: placeholderRequestImages(blocks) })
+    const baseBytes = measureResponsesRequestBytes(
+      encodeRequest({ messages: imageMessages, requestImages: placeholderRequestImages(blocks) }),
+    )
 
     return Object.freeze({
       model,
@@ -109,6 +130,7 @@ export function createResponsesRequestCompiler({
       reasoningEffort,
       signal,
       compile: (route) => compileImageRequest({
+        baseBytes,
         encodeRequest,
         getAttachmentStore,
         messages: imageMessages,
@@ -132,6 +154,7 @@ export function createResponsesRequestCompiler({
 }
 
 async function compileImageRequest({
+  baseBytes,
   encodeRequest,
   getAttachmentStore,
   messages: capturedMessages,
@@ -148,55 +171,159 @@ async function compileImageRequest({
   signal?.throwIfAborted()
   const policy = parseImagePolicy(route)
   for (const ref of capturedRefs.values()) validateImageRef(ref, CAPTURE_IMAGE_POLICY)
-  let messages = offloadRequestImagesWithPolicy(capturedMessages, {
-    representation: "raw",
-    maxImages: policy.maxImages,
-    placeholder: offloadedImageText,
-  })
+
+  // A Host-owned durable offload decision reaches this adapter as `offloaded`
+  // image blocks: that occurrence is sent as placeholder text, never as bytes,
+  // and it stays out of every budget computation below.
+  const messages = projectOffloadedImageMessages(capturedMessages)
+  // The occurrence limit needs no attachment bytes, so a request over it never
+  // pays for a read it is not allowed to send.
+  const overCount = requiredImageOffload(
+    messages,
+    Object.freeze({ representation: "raw", maxImages: policy.maxImages }),
+    () => 0,
+  )
+  if (overCount > 0) throw new ImageOffloadRequiredError(overCount)
+
   const blocks = collectImageBlocks(messages)
   const refs = indexUniqueImageRefs(blocks)
   const store = getAttachmentStore()
-  if (!store || typeof store.readImageRequest !== "function") {
-    throw new UnsupportedImageInputError()
+  const versionsById = new Map()
+
+  if (refs.size > 0) {
+    if (!store || typeof store.readImageRequest !== "function") {
+      throw new UnsupportedImageInputError()
+    }
+    await Promise.all([...refs.entries()].map(async ([attachmentId, ref]) => {
+      const returned = await store.readImageRequest(ref, policy.readPolicy, signal)
+      signal?.throwIfAborted()
+      const version = captureRequestImage(returned, policy)
+      validateRequestImage(version, ref, policy)
+      versionsById.set(
+        attachmentId,
+        await normalizeRequestImage(version, policy, transcodeImage),
+      )
+    }))
   }
 
-  const versionsById = new Map()
-  await Promise.all([...refs.entries()].map(async ([attachmentId, ref]) => {
-    const returned = await store.readImageRequest(ref, policy.readPolicy, signal)
-    signal?.throwIfAborted()
-    const version = captureRequestImage(returned, policy)
-    validateRequestImage(version, ref, policy)
-    versionsById.set(
-      attachmentId,
-      await normalizeRequestImage(version, policy, transcodeImage),
-    )
-  }))
+  // Grok Responses inlines base64 image payloads, so the route budget is stated
+  // in represented bytes. Exceeding it is a Host-visible decision: ask for the
+  // oldest retained occurrences to be offloaded and let the Harness retry,
+  // rather than dropping image bytes inside the adapter.
+  const offloadImages = requiredImageOffload(
+    messages,
+    imageRequestBudget(policy, baseBytes),
+    (block) => requireRequestImage(versionsById, block).bytes,
+  )
+  if (offloadImages > 0) throw new ImageOffloadRequiredError(offloadImages)
+
+  // The Host's durable offload walker selects only top-level occurrences, so a
+  // request that still exceeds the route budget after that projection cannot be
+  // repaired by the protocol. Refuse it instead of sending an oversized
+  // request the provider would reject.
+  if (exceedsRouteBudget(messages, policy, versionsById)) {
+    throw new UnsupportedResponsesRequestError()
+  }
 
   const requestImages = new Map(blocks.map((block) => [
     block.attachment,
     versionsById.get(String(block.attachment.attachmentId)),
   ]))
-  messages = offloadRequestImagesWithPolicy(messages, {
-    representation: "raw",
-    maxBytes: policy.maxTotalBytes,
-    byteLength: (ref) => versionsById.get(String(ref.attachmentId)).bytes,
-    placeholder: offloadedImageText,
-  })
+  return createCompiledRequest(encodeRequest({ messages, requestImages }))
+}
 
-  while (true) {
-    try {
-      return createCompiledRequest(encodeRequest({ messages, requestImages }))
-    } catch (error) {
-      if (!(error instanceof ResponsesRequestTooLargeError)) throw error
-      const imageCount = collectImageBlocks(messages).length
-      if (imageCount === 0) throw error
-      messages = offloadRequestImagesWithPolicy(messages, {
-        representation: "raw",
-        maxImages: imageCount - 1,
-        placeholder: offloadedImageText,
-      })
+/**
+ * Whether every retained occurrence, including images nested one level inside a
+ * tool result, stays inside the route's occurrence and represented-byte budget.
+ * @param messages - projection about to be encoded.
+ * @param policy - validated route image policy.
+ * @param versionsById - normalized version of every retained occurrence.
+ * @returns whether the route budget is exceeded.
+ */
+function exceedsRouteBudget(messages, policy, versionsById) {
+  let occurrences = 0
+  let representedBytes = 0
+  const visit = (blocks) => {
+    for (const block of blocks) {
+      if (block.type === "image") {
+        occurrences += 1
+        representedBytes += base64Length(requireRequestImage(versionsById, block).bytes)
+        continue
+      }
+      if (block.type === "tool-result") visit(block.content)
     }
   }
+  for (const message of messages) visit(message.content)
+  return occurrences > policy.maxImages ||
+    representedBytes > base64BudgetOfRawBytes(policy.maxTotalBytes)
+}
+
+/** Represented base64 length of `bytes` of image data. */
+function base64Length(bytes) {
+  return Math.ceil(bytes / 3) * 4
+}
+
+/**
+ * Route budget for one image request: the catalog's occurrence and byte limits
+ * plus the headroom the serialized request still has under the encoder ceiling.
+ * @param policy - validated route image policy.
+ * @param baseBytes - serialized byte length of this request without image payloads.
+ * @returns the route's {@link LlmImageRequestBudget} in represented (base64) bytes.
+ */
+function imageRequestBudget(policy, baseBytes) {
+  const encodedHeadroom = Math.max(
+    0,
+    MAX_RESPONSES_REQUEST_BYTES - baseBytes - REQUEST_BYTES_SAFETY_MARGIN,
+  )
+  return Object.freeze({
+    representation: "base64",
+    maxImages: policy.maxImages,
+    maxBytes: Math.min(base64BudgetOfRawBytes(policy.maxTotalBytes), encodedHeadroom),
+  })
+}
+
+/** Represented base64 budget that never exceeds `rawBytes` of image data. */
+function base64BudgetOfRawBytes(rawBytes) {
+  return Math.floor(rawBytes / 3) * 4
+}
+
+function requireRequestImage(versionsById, block) {
+  const version = versionsById.get(String(block.attachment.attachmentId))
+  if (version === undefined) throw new InvalidRequestImageProjectionError()
+  return version
+}
+
+/** Replace every Host-offloaded occurrence, including nested tool results, with placeholder text. */
+function projectOffloadedImageMessages(messages) {
+  let changed = false
+  const projected = messages.map((message) => {
+    const content = projectOffloadedImageContent(message.content)
+    if (content === message.content) return message
+    changed = true
+    return Object.freeze({ ...message, content })
+  })
+  return changed ? Object.freeze(projected) : messages
+}
+
+function projectOffloadedImageContent(blocks) {
+  let next
+  for (const [index, block] of blocks.entries()) {
+    if (block.type === "image" && block.offloaded === true) {
+      next ??= blocks.slice(0, index)
+      next.push(Object.freeze({ type: "text", text: offloadedImageText(block.attachment) }))
+      continue
+    }
+    if (block.type === "tool-result") {
+      const content = projectOffloadedImageContent(block.content)
+      if (content !== block.content) {
+        next ??= blocks.slice(0, index)
+        next.push(Object.freeze({ ...block, content }))
+        continue
+      }
+    }
+    next?.push(block)
+  }
+  return next ?? blocks
 }
 
 function captureSearchPolicy(searchPolicy) {
@@ -355,9 +482,11 @@ function snapshotContent(content) {
     if (block.type === "text" || block.type === "reasoning") {
       snapshots[index] = Object.freeze({ type: block.type, text: block.text })
     } else if (block.type === "image") {
+      const offloaded = readOffloadMark(block)
       snapshots[index] = Object.freeze({
         type: "image",
         attachment: snapshotImageRef(block.attachment),
+        ...(offloaded ? { offloaded: true } : {}),
       })
     } else if (block.type === "tool-call") {
       snapshots[index] = Object.freeze({
@@ -408,6 +537,23 @@ function snapshotImageRef(ref) {
   }
   validateImageRef(snapshot, CAPTURE_IMAGE_POLICY)
   return Object.freeze(snapshot)
+}
+
+/**
+ * Read the Host-owned durable offload mark of one image occurrence. Only the
+ * declared `offloaded?: true` shape is accepted: a value this adapter cannot
+ * read as a definite "not offloaded" fails closed instead of sending image
+ * bytes the Host decided to omit.
+ * @param block - raw image content block.
+ * @returns whether this occurrence must be sent as placeholder text.
+ */
+function readOffloadMark(block) {
+  const descriptor = Object.getOwnPropertyDescriptor(block, "offloaded")
+  if (descriptor === undefined) return false
+  if (!("value" in descriptor)) throw new UnsupportedImageInputError()
+  if (descriptor.value === true) return true
+  if (descriptor.value === false || descriptor.value === undefined) return false
+  throw new UnsupportedImageInputError()
 }
 
 function snapshotMessageSource(source, targetModel, contentLength) {

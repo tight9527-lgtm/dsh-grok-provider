@@ -6,7 +6,6 @@ import test from "node:test"
 
 import { Context } from "@deepseek-ai/cordis"
 import LlmRuntime, { LlmError } from "@deepseek-ai/dsh-llm"
-import SettingsProvider from "@deepseek-ai/dsh-settings"
 
 import * as grokPlugin from "../src/host/index.mjs"
 import { mapLlmError } from "../src/internal/llm-error.mjs"
@@ -19,11 +18,13 @@ import { UnsupportedResponsesRequestError } from "../src/internal/responses-requ
 
 const hostApplySupported = process.platform === "darwin" || process.platform === "win32"
 
-test("the Host loads against dsh-settings 0.1.5-rc.2 without deleted named helpers", async () => {
+test("the Host loads against dsh-settings 0.2.0-rc.2 without the removed section installer", async () => {
   const settings = await import("@deepseek-ai/dsh-settings")
   assert.equal(settings.installSettingsSection, undefined)
   assert.equal(settings.settingsNamespace, undefined)
-  assert.equal(typeof settings.default.prototype.installSection, "function")
+  assert.equal(settings.default.prototype.installSection, undefined)
+  assert.equal(typeof settings.default.prototype.configure, "function")
+  assert.equal(typeof settings.default.prototype.describe, "function")
   assert.equal(grokPlugin.name, "llm-grok")
   assert.equal(typeof grokPlugin.apply, "function")
 })
@@ -34,7 +35,7 @@ test("the Host plugin registers and cleanly removes the Grok provider in the rea
   const ctx = new Context()
   const llmFiber = ctx.plugin(LlmRuntime)
   await llmFiber
-  const grokFiber = ctx.plugin(grokPlugin)
+  const grokFiber = ctx.plugin(grokPlugin, { proxyEnabled: false })
   await grokFiber
 
   assert.deepEqual(ctx.llm.listProviders(), [{ id: "grok", name: "Grok Build" }])
@@ -44,45 +45,84 @@ test("the Host plugin registers and cleanly removes the Grok provider in the rea
   await llmFiber.dispose()
 })
 
-test("the Host exposes one live llm-grok settings namespace with safe defaults", {
+test("the Host claims its own settings presentation instead of registering a section", {
   skip: hostApplySupported ? false : "Host apply is macOS/Windows only",
 }, async () => {
   const ctx = new Context()
-  const settingsFiber = ctx.plugin(MemorySettingsProvider)
+  const settings = createSettingsStub()
+  const settingsFiber = ctx.plugin(settings.plugin)
   await settingsFiber
   const llmFiber = ctx.plugin(LlmRuntime)
   await llmFiber
-  const grokFiber = ctx.plugin(grokPlugin)
+  const grokFiber = ctx.plugin(grokPlugin, { proxyEnabled: false })
   await grokFiber
 
-  assert.deepEqual(ctx.settings.describe().map(({ ns, value, applies }) => ({
-    ns,
-    value,
-    applies,
-  })), [{
-    ns: "llm-grok",
-    value: { webSearch: false, xSearch: false },
-    applies: "live",
-  }])
+  // Harness 0.2.0 projects the settings form from this Config, and only
+  // volatile fields are editable at runtime.
+  assert.equal(grokPlugin.Config.dict.webSearch.meta.volatile, true)
+  assert.equal(grokPlugin.Config.dict.xSearch.meta.volatile, true)
+  assert.equal(grokPlugin.Config.dict.proxyEnabled.meta.volatile, true)
+  assert.equal(grokPlugin.Config.dict.proxyUrl.meta.volatile, true)
+  // The namespace is the Loader entry id, so the plugin registers no section
+  // and no namespace of its own with the settings service, and it declines the
+  // auto-generated page because this package ships its own.
+  assert.equal(settings.calls.length, 1)
+  assert.deepEqual(settings.calls[0].presentation, { auto: false })
+  const owner = settings.calls[0].owner
+  // One instance may hold one presentation policy at a time.
+  assert.throws(
+    () => settings.service.configure({ auto: false }, owner),
+    /already configured/u,
+  )
 
+  // The presentation is effect-owned: unloading the plugin releases it.
   await grokFiber.dispose()
-  assert.deepEqual(ctx.settings.describe(), [])
+  const release = settings.service.configure({ auto: false }, owner)
+  assert.equal(typeof release, "function")
+  release()
+
   await llmFiber.dispose()
   await settingsFiber.dispose()
 })
 
-test("the Host exposes opt-in Search policy without a selectable authentication mode", () => {
-  assert.deepEqual(grokPlugin.Config({}), { webSearch: false, xSearch: false })
-  assert.deepEqual(grokPlugin.Config({ webSearch: true, xSearch: false }), {
+test("the Host exposes opt-in Search policy and an opt-out proxy without a selectable authentication mode", () => {
+  assert.deepEqual(readLiveConfig({}), {
+    webSearch: false,
+    xSearch: false,
+    proxyEnabled: true,
+    proxyUrl: "http://127.0.0.1:7897",
+  })
+  assert.deepEqual(readLiveConfig({ webSearch: true, xSearch: false }), {
     webSearch: true,
     xSearch: false,
+    proxyEnabled: true,
+    proxyUrl: "http://127.0.0.1:7897",
+  })
+  assert.deepEqual(readLiveConfig({ proxyEnabled: false, proxyUrl: "http://10.0.0.5:3128" }), {
+    webSearch: false,
+    xSearch: false,
+    proxyEnabled: false,
+    proxyUrl: "http://10.0.0.5:3128",
   })
   assert.throws(() => grokPlugin.Config({ webSearch: "true" }), TypeError)
+  assert.throws(() => grokPlugin.Config({ proxyEnabled: "true" }), TypeError)
+  assert.throws(() => grokPlugin.Config({ proxyUrl: 7897 }), TypeError)
   assert.doesNotMatch(String(grokPlugin.Config), /authMode/u)
   assert.deepEqual(Object.keys(grokPlugin).sort(), ["Config", "apply", "inject", "name"])
 })
 
-test("the Host applies Search settings to later calls while prepared calls keep their snapshot", {
+/** Read the validated Config the way the Host does: a volatile field is a live reference. */
+function readLiveConfig(raw) {
+  const parsed = grokPlugin.Config(raw)
+  return {
+    webSearch: parsed.webSearch.get(),
+    xSearch: parsed.xSearch.get(),
+    proxyEnabled: parsed.proxyEnabled.get(),
+    proxyUrl: parsed.proxyUrl.get(),
+  }
+}
+
+test("the Host applies Search configuration to later calls across a plugin reload", {
   skip: hostApplySupported ? false : "Host apply is macOS/Windows only",
 }, async () => {
   const originalFetch = globalThis.fetch
@@ -120,9 +160,12 @@ test("the Host applies Search settings to later calls while prepared calls keep 
     }
 
     const ctx = new Context()
+    const settings = createSettingsStub()
+    settingsFiber = ctx.plugin(settings.plugin)
+    await settingsFiber
     llmFiber = ctx.plugin(LlmRuntime)
     await llmFiber
-    grokFiber = ctx.plugin(grokPlugin, { webSearch: true })
+    grokFiber = ctx.plugin(grokPlugin, { webSearch: true, proxyEnabled: false })
     await grokFiber
 
     const requestOptions = (id) => ({
@@ -136,27 +179,22 @@ test("the Host applies Search settings to later calls while prepared calls keep 
       }],
     })
 
-    for await (const _chunk of ctx.llm.stream(requestOptions("composition-fallback"))) {}
+    for await (const _chunk of ctx.llm.stream(requestOptions("configured-before-reload"))) {}
 
-    settingsFiber = ctx.plugin(MemorySettingsProvider)
-    await settingsFiber
-    assert.deepEqual(ctx.settings.get("llm-grok"), { webSearch: true, xSearch: false })
+    // Harness 0.2.0 applies a configuration write by reloading the plugin entry
+    // with its new config, so later calls use the new policy. That unload also
+    // retires the previous generation — the Host contract requires an unload to
+    // abort its fetches — while the per-generation snapshot a prepared call
+    // takes is covered by the adapter and request-compiler suites.
+    await grokFiber.dispose()
+    grokFiber = ctx.plugin(grokPlugin, { webSearch: false, xSearch: true, proxyEnabled: false })
+    await grokFiber
 
-    const prepared = await ctx.llm.prepareCall({ provider: "grok", model: "grok-4.6" })
-    await ctx.settings.update("llm-grok", { webSearch: false, xSearch: true })
-
-    for await (const _chunk of prepared.stream(requestOptions("prepared-before-update"))) {}
-    for await (const _chunk of ctx.llm.stream(requestOptions("created-after-update"))) {}
-
-    await settingsFiber.dispose()
-    settingsFiber = undefined
-    for await (const _chunk of ctx.llm.stream(requestOptions("after-settings-dispose"))) {}
+    for await (const _chunk of ctx.llm.stream(requestOptions("created-after-reload"))) {}
 
     assert.deepEqual(capturedRequests.map((request) => request.tools), [
       [{ type: "web_search" }],
-      [{ type: "web_search" }],
       [{ type: "x_search" }],
-      [{ type: "web_search" }],
     ])
   } finally {
     globalThis.fetch = originalFetch
@@ -180,16 +218,39 @@ test("the Host applies Search settings to later calls while prepared calls keep 
   }
 })
 
-class MemorySettingsProvider extends SettingsProvider {
-  writable = true
-  document = {}
-
-  async load() {
-    return structuredClone(this.document)
+/**
+ * The Host's settings service is a Loader/profile-owned service, so a unit test
+ * supplies the smallest faithful stand-in: entry-independent `configure`
+ * bookkeeping for the presentation policy this plugin claims.
+ */
+function createSettingsStub() {
+  const live = new Map()
+  const calls = []
+  const service = {
+    configure(presentation, owner) {
+      if (live.has(owner)) {
+        throw new Error("Settings presentation is already configured for this plugin instance")
+      }
+      live.set(owner, presentation)
+      calls.push({ presentation, owner })
+      return () => live.delete(owner)
+    },
+    describe() {
+      return []
+    },
   }
-
-  async persist(ns, section) {
-    this.document[ns] = structuredClone(section)
+  return {
+    calls,
+    service,
+    plugin: {
+      name: "test/settings-stub",
+      apply(pluginCtx) {
+        pluginCtx.provide("settings", service)
+      },
+    },
+    get live() {
+      return [...live.values()]
+    },
   }
 }
 

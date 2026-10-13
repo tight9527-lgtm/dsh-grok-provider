@@ -4,11 +4,13 @@
 
 让 DeepSeek Harness 使用你已登录的官方 Grok Build 账号：动态模型发现、流式推理、图片输入、可选 Web/X Search、工具调用，以及账号额度与模型能力面板。
 
-> 非官方社区项目，与 xAI 或 DeepSeek Harness 官方无隶属关系。本说明对应 `dsh-grok-provider@1.0.6` 制品；`0.1.8` 曾发布后撤回且版本号不可复用。
+> 非官方社区项目，与 xAI 或 DeepSeek Harness 官方无隶属关系。本说明对应 `dsh-grok-provider@2.1.0` 制品；`0.1.8` 曾发布后撤回且版本号不可复用。
 
-`1.0.6` 修复带透明通道的 WebP 图片在 Grok 请求前被拒绝的问题。透明 WebP 会在写入 Responses 请求前转码为 PNG，不透明 WebP 转码为 JPEG。
+`2.1.0` 在 `2.1.0` 的 `0.2.0-rc.2` 移植基础上新增**设置页网络代理**：Node 的 `fetch` 不读 Windows 系统代理，只认 `HTTP(S)_PROXY` 环境变量，所以本机靠 Clash 之类的本地代理出网时，此前会出现“已登录但读不到额度与模型”。现在可在设置页直接填写代理地址（默认 `http://127.0.0.1:7897`），无需重启宿主或改环境变量。
 
-本 README 随 `1.0.6` 一起进入 npm tarball，下面的精确安装命令也固定为 `1.0.6`。上一份已完成供应链回读的版本为 `1.0.5`。
+`2.1.0` 移植到 DeepSeek Harness `0.2.0-rc.2`：`@deepseek-ai/dsh-settings` 已删除 `installSection`、`@deepseek-ai/dsh-llm` 已删除 `offloadRequestImagesWithPolicy`、客户端已用 `configForms` 取代 `settingsScope`。升级宿主后旧版 `1.0.x` 无法加载，必须升级到 `2.1.0`；`2.1.0` 也只支持 Harness `0.2.0` 系列。
+
+本 README 随 `2.1.0` 一起进入 npm tarball，下面的精确安装命令也固定为 `2.1.0`。上一份已完成供应链回读的版本为 `1.0.5`。
 
 ## 它解决什么问题
 
@@ -20,6 +22,7 @@
 | 对话 | Responses 流式文本、reasoning、加密 reasoning replay、usage 与 finish reason |
 | 图片 | 仅精确 `grok-4.6` 接收 Harness attachment 中有界的 JPEG/PNG/WebP 图片；WebP 在发送前转为 Grok 接受的 PNG/JPEG，`grok-4.5` 与其他模型保持 text-only |
 | 搜索 | 精确 `grok-4.6` 提供默认关闭的 Web/X Search；使用实时 settings service 保存开关 |
+| 网络 | 设置页可配置出网代理（默认 `http://127.0.0.1:7897`），只作用于本插件的 Grok 请求；本机代理未监听时自动回退直连，非本机代理不可用时失败关闭 |
 | 工具 | 将 function call 交回 Harness 权限层；Provider 本身不执行工具，关闭对应 Search 开关时保留本地 `web_search` / `x_search` |
 | 账户面板 | 登录状态、每周/月额度、重置时间、动态模型能力与 reasoning 档位 |
 | 界面 | Web 设置页中英文切换；TUI 提供闭合的 `/grok` 命令 |
@@ -28,8 +31,8 @@
 
 ### 1. 准备环境
 
-- DeepSeek Harness `0.1.5-rc.2`
-- Node.js `24.19.0` 或更高版本
+- DeepSeek Harness `0.2.0-rc.2`
+- Node.js `24.21.0` 或更高版本
 - macOS arm64 或 Windows x64
 - 官方 Grok Build CLI（支持 `login --oauth`，并使用官方默认 Grok home）
 
@@ -47,7 +50,7 @@ grok models
 安装精确版本：
 
 ```sh
-dsh plugin --profile web add dsh-grok-provider@1.0.6
+dsh plugin --profile web add dsh-grok-provider@2.1.0
 dsh web
 ```
 
@@ -62,6 +65,37 @@ dsh web
 
 插件不会接管登录页面，也不会要求粘贴 access token 或 refresh token。
 
+### 4. 代理与网络（已登录但读不到额度/模型时先看这里）
+
+Provider 的 `/v1/models`、`/v1/billing` 与 `/v1/responses` 都走宿主进程的 `fetch`，而 **Node 的 `fetch` 不读 Windows 系统代理**，只认 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量。如果宿主是从普通快捷方式启动、本机又靠 Clash 之类的本地代理出网，就会出现：
+
+- 官方 `grok` CLI 登录正常（CLI 自己处理代理，且凭据是本地文件）；
+- 但设置页一直显示“暂时无法读取 Grok Build 额度”“暂时无法读取模型目录”，模型选择器里也没有 Grok 模型。
+
+**设置页 → Grok Build → 网络代理** 直接解决这件事：打开开关并填写地址即可，保存后无需重启宿主。默认值就是本地常见端口 `http://127.0.0.1:7897`。
+
+生效规则（页面底部也有同样说明）：
+
+| 情况 | 结果 |
+| --- | --- |
+| 宿主启动环境已有 `HTTP_PROXY` / `HTTPS_PROXY` | 环境变量优先，插件不再叠加自己的代理（DSH 启动器已装好全局 dispatcher） |
+| 插件代理关闭 | 直连 |
+| 地址为本机代理且正在监听 | 本插件的 Grok 请求经该代理发出 |
+| 地址为本机代理但未监听 | **自动回退直连**，页面显示“未检测到本机代理” |
+| 地址不可用（非 `http(s)`、带用户名密码、为空） | 按直连处理，页面提示地址无效 |
+| 地址为非本机代理 | 不会回退：不可用时失败关闭，避免绕过代理直发 |
+
+也可以不用设置页，改为在宿主进程的启动环境里提供代理变量：
+
+```bat
+set "HTTPS_PROXY=http://127.0.0.1:7897"
+set "HTTP_PROXY=http://127.0.0.1:7897"
+set "NODE_USE_ENV_PROXY=1"
+set "NO_PROXY=localhost,127.0.0.1,::1,192.168.*,10.*"
+```
+
+`NO_PROXY` 必须保留 loopback 项。校验方式：把上面四个变量设进当前 shell 后执行 `node -e "fetch('https://cli-chat-proxy.grok.com/v1/models').then(r=>console.log(r.status))"`，超时（`UND_ERR_CONNECT_TIMEOUT`）说明没走代理，得到 `401`（未带 token 的正常响应）说明通了。插件只按上述规则使用你填写的地址，不解析、不改动 Windows 系统代理与宿主其它流量。代理地址不接受用户名密码，也不写入任何日志。
+
 ## 使用界面
 
 Web 设置页展示：
@@ -74,7 +108,7 @@ Web 设置页展示：
 
 当 protobuf-backed billing 返回完整的 weekly/monthly 周期但省略零值百分比时，页面会恢复为“已使用 0% / 剩余 100%”；其他不完整响应保持未知，不伪造额度。
 
-Harness `0.1.5-rc.2` 的 `settings.section` 没有插件图标字段。Provider 内嵌来自 `@deepseek-ai/dsh-client-ui-primitives@0.1.0-rc.7`、采用 MIT 许可的 `IconThinkOutline16` 路径几何；仅当设置对话框中的标签与 DOM 结构都精确且唯一匹配时，才用它显示 `Grok Build` 导航项，否则安全保留宿主齿轮。兼容层的观察器、标记和样式均随插件卸载清理。
+Harness `0.2.0-rc.2` 的 `settings.section` 没有插件图标字段。Provider 内嵌来自 `@deepseek-ai/dsh-client-ui-primitives@0.1.0-rc.7`、采用 MIT 许可的 `IconThinkOutline16` 路径几何；仅当设置对话框中的标签与 DOM 结构都精确且唯一匹配时，才用它显示 `Grok Build` 导航项，否则安全保留宿主齿轮。兼容层的观察器、标记和样式均随插件卸载清理。
 
 ## 插件预览
 
@@ -145,6 +179,24 @@ dsh web
 
 ## 兼容性与范围
 
+### `2.1.0` 新增：设置页网络代理
+
+- 新增两个可运行时编辑的 Config 字段（均为 `.volatile()`）：`proxyEnabled`（默认 `true`）与 `proxyUrl`（默认 `http://127.0.0.1:7897`）。设置页新增“网络代理”分区：开关 + 地址输入 + 保存，并显示宿主实际解析出的路线。
+- 代理只作用于本插件的 Grok 请求：路由在每次请求时解析，使用 `undici` 的 `ProxyAgent` 作为该请求的 dispatcher，不改动宿主进程的全局 dispatcher，也不影响其它插件或宿主的其它流量。
+- 判定顺序：启动环境已有 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 时不叠加（环境优先，DSH 启动器已安装全局 dispatcher）；其次按 `proxyEnabled`；地址仅接受不含用户名密码的 `http:`/`https:` URL。
+- 回退规则：本机代理（`127.0.0.1` / `localhost` / `::1`）用一次有界 TCP 探测判定；未监听时回退直连并在页面标注，成功探测缓存 30 秒。非本机代理不做探测也不回退，不可用时失败关闭，避免绕过代理直发。
+- 诊断 outcome 增加闭集字段 `network`（`environment`/`disabled`/`proxy`/`proxy-unavailable`/`proxy-invalid`），只报告路线种类，不携带代理地址或上游 URL。
+- 新增运行期依赖 `undici ^8.10.0`（与 Harness 自身 `@deepseek-ai/dsh-http-proxy` 同库，无原生代码）。
+
+### `2.0.1` 移植边界
+
+- Harness `0.2.0-rc.2` 删除了本插件此前依赖的三处 API：`@deepseek-ai/dsh-settings` 的 `ctx.settings.installSection`、`@deepseek-ai/dsh-llm` 的 `offloadRequestImagesWithPolicy`（named import 缺失会让宿主在加载期直接失败）、客户端 `settingsScope` service。`1.0.x` 在新宿主上无法加载。
+- 图片链路改走 Harness `0.2.0` 的宿主决策协议：路由声明 occurrence 与 byte 预算，超出预算时以 `IMAGE_OFFLOAD_REQUIRED` 带上 `offloadImages` 计数失败，由宿主 `dsh-compaction-image-offload` 记录持久 `image/offload` 决策后重试；被宿主标记 `offloaded` 的图片改为发送固定占位文本。插件不再自行丢弃图片。
+- 设置改为 Harness `0.2.0` 的条目所有权模型：命名空间即 profile 条目 id `llm-grok`，表单从本插件 `Config` 派生（`webSearch` / `xSearch` 标记 `.volatile()`），插件用 `ctx.settings.configure({ auto: false }, ctx.fiber)` 声明自带页面。
+- 浏览器设置页从 `settingsScope` 迁移到设置域共享的 `configForms`；开关读写、只读/不可用失败关闭与卸载清理语义保持不变。
+- required/optional peer 与开发依赖对齐 `0.2.0-rc.2`（Cordis `4.0.4`、Schemastery `3.18.4`），`dsh.client.inject` 增加 `@deepseek-ai/dsh-client-ui-slots`。
+- 认证、模型目录、Responses codec、Search 协议、部分输出保留与 `/grok` 命令的既有边界不变。本版完成本地 0.2.0 包树加载验证与静态回归；未在真实账号上重跑生成，也不构成 Windows 真机验收。
+
 ### `1.0.6` 修复边界
 
 - 修复 DSH 附件库把带透明通道的图片规范化为 `image/webp` 后，`grok-4.6` 在网络请求前失败的问题。
@@ -198,17 +250,17 @@ dsh web
 - 最终源码完成两层脱敏真实账号复验：原始 Web/X 协议探针各 1 次请求、各 64 events，分别观察到对应 Search 且终态 `completed`；生产 adapter 共完成 5 次 Responses，direct Web/X 均为 `stop`，Harness 形状的本地 `x_search` call/result 续跑三轮依次为 `tool-calls`、`tool-calls`、`stop`，前两轮各 1 次本地调用。该续跑没有在同一 wire request 中同时放入 Harness `x_search` function definition 与 xAI `{ type: "x_search" }` server descriptor；`1.0.1` 后续才隔离出这一 HTTP 400 冲突。未保存结果、URL、prompt、身份或凭据；这些不是发布、OAuth 或 Windows 真机证据。
 - manifest/lock 已同步为 `1.0.0`；Node 24 全量测试为 245 项、243 pass、0 fail、2 项平台跳过，生产依赖审计为 0 漏洞，确定性 build/bundle、72 项 dry-run pack、秘密模式扫描与 diff 检查均通过。代码 PR #28、main CI run [`33308371009`](https://github.com/yoshino-xiao7/dsh-grok-provider/actions/runs/33308371009)、最终 release commit、双平台 final CI、唯一制品、精确授权及 Registry/signature/attestation/provenance 回读均已完成。
 
-| 项目 | `1.0.6` 兼容边界 |
+| 项目 | `2.1.0` 兼容边界 |
 | --- | --- |
-| DeepSeek Harness | 精确支持 `0.1.5-rc.2` |
+| DeepSeek Harness | 支持 `0.2.0` 系列（`^0.2.0-rc.1 \|\| ^0.2.0-rc.2`）；不再支持 `0.1.x` |
 | Node.js | `>=24.19.0` |
-| macOS arm64 | 图片发送已完成真实 Harness 验证；`1.0.5` 验证 `0.1.5-rc.2` 账户 RPC |
+| macOS arm64 | 图片发送的真实 Harness 验证来自 `1.0.6`（`0.1.5-rc.2`）；`2.1.0` 在本地 0.2.0 包树上完成加载与回归 |
 | Windows x64 | 代码路径与现有 slow-fake 保持不变；网络可达时由官方 CLI 生成 URL 并打开浏览器，该路径仍未完成 Windows 真机验收 |
 | macOS x64 / Linux | 不支持 |
 | Grok CLI | 不锁完整版本；严格校验官方路径、`login --oauth` 能力与生产 OIDC 凭据契约 |
 | 模型 | 当前账号目录中 backend 已被严格 codec 支持的全部模型 |
 
-`1.0.6` 沿用已发布版本的图片边界：只为精确的 `grok-4.6` 开启图片输入；`grok-4.5` 与其他动态发现的模型继续按 text-only 处理。图片只能来自 Harness attachment service 的已验证 JPEG/PNG/WebP 投影；WebP 在发送前转换为 Grok 接受的 PNG/JPEG。支持普通用户内容和一层工具结果中的图片，并固定使用 `detail:"high"`；不接受 URL、文件路径、file ID 或调用方预制的 data URL。普通 user/system 历史中的私有 reasoning 会被省略并保留相邻可见文本。
+`2.1.0` 沿用已发布版本的图片边界：只为精确的 `grok-4.6` 开启图片输入；`grok-4.5` 与其他动态发现的模型继续按 text-only 处理。图片只能来自 Harness attachment service 的已验证 JPEG/PNG/WebP 投影；WebP 在发送前转换为 Grok 接受的 PNG/JPEG。支持普通用户内容和一层工具结果中的图片，并固定使用 `detail:"high"`；不接受 URL、文件路径、file ID 或调用方预制的 data URL。普通 user/system 历史中的私有 reasoning 会被省略并保留相邻可见文本。预算按 base64 表示长度计算，与序列化请求上限 `16 MiB` 共用同一组常量；occurrence 上限在读取附件字节前先用计数判定，因此因数量超限而必然被淘汰的图片不会产生额外读取。
 
 每张投影图片最多 4 MiB、16,777,216 像素且任一边不超过 8192px；每次请求最多保留 8 张、投影字节合计最多 8 MiB。超限时按全局最旧优先移除图片并保留 Harness 的文本占位，最终 JSON 仍受 16 MiB 上限约束。
 

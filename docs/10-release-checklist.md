@@ -311,3 +311,30 @@ English summary: every release must close documentation, security, tests, determ
 - [x] 受管目录仍固定历史已验收的 0.1.0 / darwin-arm64 条目；本次没有伪造 1.0.5 的受管桌面安装验收或修改该来源。
 
 本次发布未替换用户正在使用的桌面插件。Windows 真机浏览器登录和真实模型生成仍未重测。正式 tarball 保持不可变，本记录只更新仓库文档。
+
+## 2.1.0 设置页网络代理（2026-10-13，未发布）
+
+- [x] 需求：在插件设置页新增可配置的出网代理，默认 `http://127.0.0.1:7897`，解决“已登录但读不到额度与模型”。
+- [x] 宿主：`Config` 增加 `proxyEnabled`（默认 `true`）与 `proxyUrl`（默认 `http://127.0.0.1:7897`），均为 `.volatile()`；新增 `src/internal/network-proxy.mjs`（`createNetworkRoute`）——环境代理优先、插件作用域、每请求解析、`undici` `ProxyAgent` 作为该请求 dispatcher、从不调用 `setGlobalDispatcher`；地址只接受不含凭据的 `http:`/`https:` URL；loopback 目标（`127.0.0.1`/`localhost`/`::1`）用 400 ms TCP 探测判定，未监听则回退直连，成功探测缓存 30 s，代理连接级失败立即作废缓存；非 loopback 不探测不回退、失败关闭。`runtime-diagnostics` 与 `auth-rpc` 增加闭集 `network` 字段（不携带地址）。运行期依赖新增 `undici ^8.10.0`。
+- [x] 客户端：设置页新增“网络代理”分区（开关 + 地址输入 + 保存 + 当前路线标签 + 回退说明，中英双语）；写路径与 Search 开关共用 `configForms` 控制器、`writeConfig` 单写保护与只读/不可用失败关闭；地址在页面侧先做一次 `http(s)://` 形态校验，避免把明显错误写入 profile。
+- [x] 本地门禁（Windows x64，Node `24.21.0`）：297 tests、295 pass、0 fail、2 platform skips。新增 `test/network-proxy.test.mjs`（环境优先、关闭、四种不可用地址、loopback 回退与负探测不缓存、正探测缓存与过期、连接失败作废缓存、配置热变更、卸载、非本机不探测）与客户端两例（面板读写与拒写、五种路线标签）；`host-load`、`runtime-diagnostics`、`auth-rpc`、`release-artifact` 断言同步。
+- [x] 真实账号实测（本机 Clash `127.0.0.1:7897`，探针显式清空 `HTTPS_PROXY`/`HTTP_PROXY` 以强制走插件自有路由）：`route state=proxy`；`transport.listModels()` 3688 bytes、`transport.getBilling()` 413 bytes 均成功；完整 dashboard 返回 `models.state=ready`（4 个模型：`grok-4.7`、`grok-4.7-build-fast`、`grok-4.6`、`grok-4.5`）与 `quota.state=ready`。探针运行后已删除，未保存任何内容或凭据。
+- [x] 打包与本地安装：`npm pack` 产出 `C:\Users\Lenovo\.dsh\local-packages\dsh-grok-provider-2.1.0.tgz`（86 文件、318,604 bytes、SHA-256 `23358b5328592d56a0ecabdf663c02b23bfa67a9f32980887684b9c62570c15a`），包含 `dist/internal/network-proxy.mjs` 与 ADR-0014；`profiles/desktop/package.json` 依赖改为该 tarball（备份后缀 `20261013-235540`），用桌面内置 pnpm `11.7.0` 安装后 `node_modules/dsh-grok-provider` 的 `dist/host/index.mjs`、`dist/client/client.js`、`dist/internal/network-proxy.mjs`、`grok-provider.patch.yml` 与仓库产物逐字节一致，14 个直接依赖全部可解析，顶层目录数仍为 250；安装后用桌面 runtime Node `24.21.0` 直接导入该入口：`name=llm-grok`、四个 Config 字段、`proxyEnabled` 默认 `true`、`proxyUrl` 默认 `http://127.0.0.1:7897` 且 volatile；`undici` 由 profile 提升解析（`profiles/desktop/node_modules/undici/index.js`）。
+- 安装注记：本次 `dsh plugin --profile desktop add` 被 CLI 硬性拒绝（`profile "desktop" is managed exclusively by the Electron application`），改为直接改 profile 清单再运行内置 pnpm；`pnpm-workspace.yaml` 的 `allowBuilds` 增加 `'dsh-grok-provider@file:../../local-packages/dsh-grok-provider-2.1.0.tgz': true` 条目。pnpm 仍以退出码 1 结束（既有落后条目触发 `minimumReleaseAge`/`ERR_PNPM_IGNORED_BUILDS`，以及 sharp 可选平台包 `UND_ERR_DESTROYED` 重试警告），链接与 manifest/lockfile 更新均已完成。
+- [ ] 未完成：桌面端重启后的 UI 实测（当前运行实例仍持有 2.0.1 组合）；通过对话发起真实的 `/v1/responses` 生成；Windows 真机浏览器登录；`2.1.0` 发布到 npm（版本冻结、双平台 CI、Trusted Publisher、Registry/provenance 回读）。
+- 记录注记：上一条摘要指向当前已安装的制品（第二次 pack，含本节文字定稿前的内容）。该 tarball 内的这份检查表副本仍引用第一次 pack 的摘要（316,534 bytes / `bd2765f9…`），属自引用文档的一版滞后；两者功能文件逐字节相同。
+
+## 2.0.1 移植门禁（2026-10-13，未发布）
+
+- [x] 确认根因：桌面端 `desktopVersion 0.2.0-rc.2`（`resources/runtime/primary-runtime/runtime.json`，内置 Node `24.21.0`）。把 `dist/host/index.mjs` 指向本机 0.2.0 包树导入，复现 `SyntaxError: The requested module '@deepseek-ai/dsh-llm' does not provide an export named 'offloadRequestImagesWithPolicy'`；`@deepseek-ai/dsh-settings` 的 `SettingsForms` 原型上 `installSection` 已不存在；0.2.0 包与桌面 asar 中均无 `settingsScope`。
+- [x] 宿主改造：设置改为条目所有权模型（命名空间 = 条目 id `llm-grok`，`webSearch`/`xSearch` 标 `.volatile()` 并经实时引用读取，`ctx.settings.configure({ auto: false }, ctx.fiber)` 由 effect 持有）；图片改为 `IMAGE_OFFLOAD_REQUIRED` 宿主决策协议；`offloaded` 标记穿过两层 capture 保留。
+- [x] 客户端改造：`configForms.get("llm-grok")` 取代 `settingsScope`；`dsh.client.inject` 增加 `@deepseek-ai/dsh-client-ui-slots`。
+- [x] peer/开发依赖对齐 `0.2.0-rc.2`（Cordis `^4.0.4`、Schemastery `^3.18.4`）；删除 `node_modules` 与 lockfile 后干净安装成功（55 packages）。
+- [x] 本地全量测试：284 tests、282 pass、0 fail、2 platform skips（Windows x64，Node `24.21.0`）。回归覆盖数量超限在读取前拒绝、字节超限在有界读取后拒绝、重试请求只为被淘汰的 occurrence 发占位文本、序列化上限、仅嵌套图片导致的、宿主无法修复的超限失败关闭、真实 0.2.0 `LlmRuntime` 装载与设置声明释放、配置重载前后的 Search 策略快照。
+- [x] 文档同步：`04-harness-contract`、ADR-0013、CHANGELOG、中英文 README、SECURITY、`09-implementation-status`、本检查表。
+- [x] 桌面端重启后宿主插件与设置页均挂载；随后账号面板报“读不到额度/模型”。定位为**环境问题、非本版回归**：插件三条上游调用（`/v1/models`、`/v1/billing`、`/v1/responses`）走宿主进程 `fetch`，而 Node 的 `fetch` 不读 Windows 系统代理（`ProxyServer=127.0.0.1:7897`，Clash），只认 `HTTP_PROXY`/`HTTPS_PROXY`；本机全局只设了 `NO_PROXY` 与 `NODE_USE_ENV_PROXY=1`，代理 URL 只存在于 `~/.dsh/dsh-web-proxy.cmd`（仅供 `dsh web` 启动）。实测直连为 `UND_ERR_CONNECT_TIMEOUT`，`HTTPS_PROXY=http://127.0.0.1:7897` 下同一条 fetch 得到 `401`；用 `@deepseek-ai/dsh-http-proxy` 的启动器式 dispatcher 安装（不依赖 `NODE_USE_ENV_PROXY`）同样得到 `401`；带代理后完整 dashboard 路径返回 `models.state=ready`（4 个模型）与 `quota.state=ready`（weekly、含百分比），两个端点原始状态均为 200。
+- [x] 结论与处置：插件不自行解析系统代理（Harness 由启动器统一安装 undici dispatcher，插件必须继续用 `globalThis.fetch`）；本机新增 `~/.dsh/dsh-desktop-proxy.cmd`，在启动环境里设 `HTTPS_PROXY`/`HTTP_PROXY`/`NODE_USE_ENV_PROXY`/`NO_PROXY` 后再启动桌面端。README 与 README.en 增加“代理与网络”排查段。
+- [ ] 未完成：真实 Grok 账号在 0.2.0 宿主上的生成验证（未发起 `/v1/responses` 对话）；Windows 真机浏览器登录；版本冻结与 tarball 摘要；隔离 profile 安装回读；tag/Release/Trusted Publisher/Registry 回读。
+- [x] 本机桌面 profile 切换到该本地构建：`npm pack` 产出 `C:\Users\Lenovo\.dsh\local-packages\dsh-grok-provider-2.0.1.tgz`（84 文件、298,909 bytes、SHA-256 `76a3bd030880d43c8dfd2b27e67aa92978ea5924260c948144fdcbba9e7b4dd7`）；`profiles/desktop/package.json` 的依赖改为 `file:` 该 tarball，并把 `dsh-grok-provider` 加入 `dsh.profile.bundles`。manifest 与 lockfile 在改动前备份为 `package.json.bak-grok-20261013-182142` 与 `pnpm-lock.yaml.bak-grok-20261013-182142`。安装后 4 个关键文件与仓库产物逐字节一致，14 个依赖全部可解析；用独立 dsh `0.2.0-rc.2` 组合等价 profile 副本，组合树包含 `# == dsh-grok-provider` 与 `id: llm-grok`。
+- [x] 尚未执行项之一已消除：桌面端已重启并挂载 `llm-grok`（设置页可见）。仍未执行：`2.0.1` 发布到 npm；通过对话完成真实账号生成验证；Windows 真机浏览器登录。
+- 安装注记：本次 `dsh plugin --profile desktop add` 因 profile 既有的 3 个 24 小时内发布条目（`dompurify@3.4.17`、`dsh-pocket@2.11.0`、`dshmarket@1.66.20`）触发 `minimumReleaseAge` 供应链门禁而以退出码 1 结束；链接、manifest 与 lockfile 更新均已完成，未破坏其它依赖。回溯方式：恢复上述两份备份，再在 profile 目录执行一次 pnpm install。

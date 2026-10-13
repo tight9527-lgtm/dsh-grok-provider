@@ -7,11 +7,13 @@ test("runtime diagnostics report plugin version while the subprocess capability 
   const diagnostics = createRuntimeDiagnostics({
     pluginVersion: "0.1.6",
     getCliInspector: () => undefined,
+    getNetworkState: () => "proxy",
   })
 
   assert.deepEqual(await diagnostics.read(), {
     pluginVersion: "0.1.6",
     cli: { state: "unavailable" },
+    network: "proxy",
   })
 })
 
@@ -24,11 +26,13 @@ test("runtime diagnostics project only a safe installed CLI version", async () =
       assert.notEqual(options.signal, signal)
       return { state: "ready", version: "1.0.5" }
     },
+    getNetworkState: () => "environment",
   })
 
   assert.deepEqual(await diagnostics.read({ signal }), {
     pluginVersion: "0.1.6",
     cli: { state: "ready", version: "1.0.5" },
+    network: "environment",
   })
 })
 
@@ -39,6 +43,17 @@ test("runtime diagnostics reject extra CLI fields at the Host boundary", async (
       state: "missing",
       path: "C:\\Users\\fixture\\.grok\\bin\\grok.exe",
     }),
+    getNetworkState: () => "proxy",
+  })
+
+  await assert.rejects(diagnostics.read(), { name: "TypeError" })
+})
+
+test("runtime diagnostics refuse an unknown network state", async () => {
+  const diagnostics = createRuntimeDiagnostics({
+    pluginVersion: "0.1.6",
+    getCliInspector: () => async () => ({ state: "unavailable" }),
+    getNetworkState: () => "socks5://127.0.0.1:1080",
   })
 
   await assert.rejects(diagnostics.read(), { name: "TypeError" })
@@ -56,6 +71,7 @@ test("runtime diagnostics share one in-flight CLI inspection", async () => {
   const diagnostics = createRuntimeDiagnostics({
     pluginVersion: "0.1.6",
     getCliInspector: () => inspector,
+    getNetworkState: () => "proxy",
   })
 
   const first = diagnostics.read()
@@ -66,8 +82,8 @@ test("runtime diagnostics share one in-flight CLI inspection", async () => {
 
   result.resolve({ state: "ready", version: "1.0.5" })
   assert.deepEqual(await Promise.all([first, second]), [
-    { pluginVersion: "0.1.6", cli: { state: "ready", version: "1.0.5" } },
-    { pluginVersion: "0.1.6", cli: { state: "ready", version: "1.0.5" } },
+    { pluginVersion: "0.1.6", cli: { state: "ready", version: "1.0.5" }, network: "proxy" },
+    { pluginVersion: "0.1.6", cli: { state: "ready", version: "1.0.5" }, network: "proxy" },
   ])
 })
 
@@ -85,6 +101,7 @@ test("disposing an inspector aborts and waits for its in-flight inspection", asy
   const diagnostics = createRuntimeDiagnostics({
     pluginVersion: "0.1.6",
     getCliInspector: () => inspector,
+    getNetworkState: () => "proxy",
   })
 
   const reading = diagnostics.read()
@@ -116,6 +133,7 @@ test("cancelling the final diagnostics caller cancels the shared inspection", as
   const diagnostics = createRuntimeDiagnostics({
     pluginVersion: "0.1.6",
     getCliInspector: () => inspector,
+    getNetworkState: () => "proxy",
   })
   const caller = new AbortController()
   const reading = diagnostics.read({ signal: caller.signal })

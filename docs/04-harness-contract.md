@@ -1,4 +1,18 @@
-# DeepSeek Harness `0.1.2-rc.1` 接口契约
+# DeepSeek Harness `0.2.0-rc.2` 接口契约
+
+## 0. 0.2.0 迁移要点（`2.1.0`）
+
+Harness `0.2.0-rc.2` 删除了本插件在 `1.0.x` 中使用的三处 API，因此 `1.0.x` 在新宿主上无法加载：
+
+| 1.0.x 用法 | 0.2.0 状态 | `2.1.0` 替代 |
+| --- | --- | --- |
+| `@deepseek-ai/dsh-llm` 的 `offloadRequestImagesWithPolicy` | 已删除（named import 缺失 → 宿主加载期 ESM link 失败） | 路由声明 base64 表示预算，超限时以 `IMAGE_OFFLOAD_REQUIRED` + `offloadImages` 失败，由 `dsh-compaction-image-offload` 落持久决策后重试 |
+| `ctx.settings.installSection(...)` | 已删除 | 命名空间 = profile 条目 id `llm-grok`；表单从本插件 `Config` 派生；可编辑字段标 `.volatile()`；自带页面用 `ctx.settings.configure({ auto: false }, ctx.fiber)` 声明 |
+| 客户端 `settingsScope` service | 已删除 | 设置域共享的 `ctx.configForms.get("llm-grok")` |
+
+peer 从 `0.1.5-rc.2` 迁到 `^0.2.0-rc.1 || ^0.2.0-rc.2`（Cordis `^4.0.4`、Schemastery `^3.18.4`），`dsh.client.inject` 增加 `@deepseek-ai/dsh-client-ui-slots`。设计取舍与本地证据见 [ADR-0013](./adr/0013-dsh-0.2.0-settings-and-image-offload.md)。
+
+`2.1.0` 不改变上述迁移边界，只在其上追加插件自有的出网代理路由（见 §6「出网代理」），取舍见 [ADR-0014](./adr/0014-plugin-scoped-outbound-proxy.md)。
 
 ## 1. 目标
 
@@ -6,37 +20,38 @@
 
 兼容基线：
 
-- DeepSeek Harness：`0.1.2-rc.1`
-- Harness 内置 Node：`24.19.0`
+- DeepSeek Harness：`0.2.0-rc.2`（`2.1.0` 起；`^0.2.0-rc.1 || ^0.2.0-rc.2`）
+- Harness 内置 Node：`24.21.0`
 - 首版发布平台：`darwin-arm64`、`win32-x64`
 
 ## 2. Host peer packages
 
-`1.0.4` 需要以下精确版本。脚手架前必须按真实静态 import 图分为 required 与 optional peer：
+`2.1.0` 需要以下 peer 版本（optional 项同时声明 `peerDependenciesMeta.<name>.optional: true`）：
 
 ```json
 {
-  "@deepseek-ai/cordis": "4.0.2",
-  "@deepseek-ai/dsh-llm": "0.1.2-rc.1",
-  "@deepseek-ai/dsh-subprocess": "0.1.2-rc.1",
-  "@deepseek-ai/dsh-settings": "0.1.2-rc.1",
-  "@deepseek-ai/dsh-commands": "0.1.2-rc.1",
-  "@deepseek-ai/dsh-client-connection": "0.1.2-rc.1",
-  "@deepseek-ai/dsh-client-ui-renderer": "0.1.2-rc.1",
-  "@deepseek-ai/dsh-client-locale": "0.1.2-rc.1",
-  "@deepseek-ai/dsh-client-ui-settings": "0.1.2-rc.1",
-  "@deepseek-ai/schemastery": "3.18.2"
+  "@deepseek-ai/cordis": "^4.0.4",
+  "@deepseek-ai/dsh-llm": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-subprocess": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-settings": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-commands": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-client-connection": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-client-ui-renderer": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-client-ui-settings": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.1 || ^0.2.0-rc.2",
+  "@deepseek-ai/schemastery": "^3.18.4"
 }
 ```
 
 初步分组：
 
-- required：`@deepseek-ai/cordis`、`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery`。Host 通过 settings service 的 `installSection` 注册可选 settings namespace；包本身必须由 Runtime 提供。
+- required：`@deepseek-ai/cordis`、`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery`。Host 不再注册 settings namespace：命名空间即 Loader 条目 id，表单由本插件 `Config` 派生，可选 settings service 只用于 `configure({ auto: false })` 声明与描述读取。
 - profile-specific optional：subprocess、commands、connection 和 client UI packages。目标桌面 Runtime 必须实际挂载 subprocess service 才能提供官方 CLI 登录；缺失时模型 Provider 仍可读取已有有效官方凭据，但登录/注销动作不可用。
 
 全部放入 `peerDependencies`，optional 项同时声明 `peerDependenciesMeta.<name>.optional: true`。可选 peer 不得被 Host 入口无条件静态 import；需要通过独立 export、条件加载或已证明的 Runtime external 方式隔离。`@deepseek-ai/dsh-settings` 不是 optional peer，但 `ctx.settings` service 仍是可选能力；`ctx.inject(["settings"], ...)` 在 service 缺失或卸载时回退组合配置。Web、TUI、headless 三种缺失可选 service/peer 的测试必须通过。
 
-这些包由 Harness Runtime 满足，不进入插件普通 dependency 图。`1.0.4` 起精确钉在 `0.1.2-rc.1`；不自动放宽到未经测试的 Harness 版本。
+这些包由 Harness Runtime 满足，不进入插件普通 dependency 图。`2.1.0` 起钉在 `0.2.0` 系列；不自动放宽到未经测试的 Harness 版本，也不声明 `0.1.x` 兼容。
 
 目标是零普通 runtime dependencies。登录进程只经过 Runtime 提供的 `ctx.subprocess`；HTTP、流解析、crypto、path 和用户 home 凭据读取使用 Node 24 内建能力。插件不依赖或打包 `@deepseek-ai/dsh-subprocess-local`。
 
@@ -56,7 +71,7 @@ export function apply(ctx, config) {
 
 可选服务不能加入强制 `inject`：
 
-- settings 使用 `ctx.inject(["settings"], ...)` 与 `settings.installSection`。
+- settings 使用 `ctx.inject(["settings"], ...)`，在子级中调用 `settings.configure({ auto: false }, ctx.fiber)` 声明“本插件自带页面”，并由 effect 持有其 disposer。settings service 缺失时插件仍完整可用（组合配置即唯一配置源），不注册任何 namespace，也不读取 `settingsScope` 式的私有通道。
 - commands 使用 `ctx.inject(["commands"], ...)`。
 - Web RPC 使用 `ctx.inject(["connection"], ...)`。
 - CLI login/logout 使用 `ctx.inject(["subprocess"], (subprocessCtx) => ...)`；内部只能调用该 child context 的 `subprocessCtx.subprocess`。
@@ -132,7 +147,11 @@ finish
 - `0.1.4` 只对经过公开模型证据与固定 Proxy 语义验证的精确 `grok-4.6` 声明 `inputModalities:["text","image"]`，并由异步 request compiler 通过可选 `ctx.get("attachments")` 读取图片。`grok-4.5` 与未知模型继续 text-only，不能从 Responses backend 推导 modality。
 - 无图请求不查询 attachment service，继续使用 `0.1.3` 同步 encoder；有图请求支持普通 user 内容和一层 tool-result content，按原顺序生成 `input_text`/`input_image`，并固定使用 `detail:"high"`。更深 tool-result、assistant/system 图片、webp/gif、无 projection 或超限均在 attachment I/O 或 Responses POST 前尽早拒绝。
 - Provider-neutral 历史允许非 assistant 消息携带 `reasoning` block（例如 `subagent-settled` 上下文）。Grok wire 只重放同模型 assistant 的有效加密 reasoning；普通 user/system 历史中的 schema-valid reasoning 必须像 Harness 其他官方 adapter 一样省略，同时保留相邻可见文本，不得把私有 reasoning 改写成 user text，也不得因此阻断同消息或后续消息中的图片请求。被省略的块仍须通过字符串与长度校验，畸形/超限输入在 attachment I/O 前按通用非法 request 拒绝。一层 tool-result 的公开内容边界仍只接受 text/image，不借此放宽；其中出现 reasoning/未知 block 仍按通用非法 request 拒绝，不能因同行有图片改报为模型图片能力不足。
-- request compiler 完成全部读取、jpeg/png 元数据与魔数检查、oldest-first 淘汰和 16 MiB 最终 JSON 检查后，Adapter 才调用推理 transport。源图片 policy 失败映射 `UNSUPPORTED_CONTENT`；损坏投影、图片淘汰后仍不合法的请求与其他通用非法 request 映射 `INVALID_RESPONSE`。完整策略见 [ADR-0008](./adr/0008-image-input-request-compiler.md)。
+- request compiler 完成全部读取、jpeg/png 元数据与魔数检查、预算判定和 16 MiB 最终 JSON 检查后，Adapter 才调用推理 transport。源图片 policy 失败映射 `UNSUPPORTED_CONTENT`；损坏投影、超预算且宿主无法再淘汰的请求与其他通用非法 request 映射 `INVALID_RESPONSE`。完整策略见 [ADR-0008](./adr/0008-image-input-request-compiler.md)。
+- `2.1.0` 起图片上限走 Harness `0.2.0` 的宿主决策协议：路由以 `representation:"base64"` 声明 `maxImages` 与 `maxBytes`，其中 `maxBytes` 取“目录字节上限的 base64 表示”与“`16 MiB` 序列化上限减去本请求无图基线与安全余量”的较小值；超限时抛 `ImageOffloadRequiredError`，由 `mapLlmError` 映射为 `LlmError(IMAGE_OFFLOAD_REQUIRED, { offloadImages })`。Adapter **不再自行淘汰图片**。
+- occurrence 上限在读取任何附件字节前，用 Harness `requiredImageOffload(messages, { representation:"raw", maxImages }, () => 0)` 判定；因此仅因数量超限的请求不产生附件读取。字节上限在完成有界读取与归一化后判定，并传 `representation:"base64"` 与每个 occurrence 的归一化原始字节数。
+- 宿主 `image/offload` 决策以 `offloaded: true` 标记回到历史；该标记必须穿过 encoder capture 与 image snapshot 两层保留下来，被标记的 occurrence 以 `offloadedImageText(ref)` 占位文本发送，不进入任何预算计算。畸形 `offloaded` 值失败关闭，不发送宿主已决定省略的图片字节。
+- Harness `requiredImageOffload` 与 `dsh-compaction-image-offload` 只遍历顶层 occurrence，因此本插件按同样口径计数：仅由嵌套 tool-result 图片导致的超限不会被请求为“嵌套淘汰”。在宿主口径判定之后，编译器再用一次递归遍历核对全部 occurrence（含一层 tool-result）是否仍在 occurrence 与表示字节预算内；超出即以通用非法 request（`INVALID_RESPONSE`）失败关闭，不发出超限请求。
 - Harness `0.1.1-rc.2` 隔离门禁已加载真实 `attachment-local` 与 `LlmRuntime`：内容寻址引用生成有界 PNG request projection，仅 `grok-4.6` 保留内联 `input_image`，`grok-4.5` 与未知 `grok-future` 均投影为 text-only，并使用 0 网络请求的本地受控 transport。
 - 认证缺失或被拒使用 Harness 已识别的 LLM code `AUTH`，不用自造 `AUTH_REQUIRED`。
 
@@ -165,19 +184,27 @@ ctx.commands.register({
 
 ## 6. Web 设置与 RPC
 
-设置 namespace：`llm-grok`。
+设置 namespace：`llm-grok`（= profile 条目 id，由 `grok-provider.patch.yml` 的 `insert` 条目决定；`registerConfigurableProviders` 的 `settingsNs` 与浏览器页 `configForms.get(...)` 必须使用同一字符串）。
 
-设置页只存非敏感 UI/功能配置，不存 token、auth 文件路径、binary path 或 base URL。
+设置页只存非敏感 UI/功能配置，不存 token、auth 文件路径、binary path 或 base URL。可运行时编辑的字段必须在 `Config` 上声明 `.volatile()`，否则 settings 写入以“Config field ... is not volatile”拒绝。`2.1.0` 的可编辑字段为 `webSearch`、`xSearch`、`proxyEnabled`、`proxyUrl`。
 
-Host channel 示例：
+### 出网代理（`2.1.0`）
+
+Node 的 `fetch` 不读 Windows 系统代理，只认 `HTTP_PROXY`/`HTTPS_PROXY`；Harness 由启动器按启动环境安装进程级 undici dispatcher。因此优先级固定为：**启动环境已有代理时插件不叠加自己的配置**，其次才看 `proxyEnabled`/`proxyUrl`。插件只为本插件请求建路由：每次请求解析一次，命中时代理请求与 `undici` 的 `ProxyAgent` 一起发出，绝不调用 `setGlobalDispatcher`，也不影响其它插件或宿主其它流量。
+
+- 地址校验：必须是可解析的 `http:`/`https:` URL，且 `username`/`password` 为空；否则按直连处理并把诊断路线标记为 `proxy-invalid`。
+- 本机代理（`127.0.0.1`/`localhost`/`::1`）用一次 400 ms TCP 探测判定可用性；不可用时回退直连（标记 `proxy-unavailable`），成功结果缓存 30 s，代理请求自身出现连接级失败时立即作废该缓存。非本机代理不做探测、不回退，失败即失败关闭。
+- 诊断路线为闭集 `network`：`environment`（环境优先）、`disabled`、`proxy`、`proxy-unavailable`、`proxy-invalid`；同样不得携带代理地址。
+
+Host 路由示例（`1.0.5` 起；`0.2.0` 的 `ConnectionFetchRoute` 形状不变）：
 
 ```ts
-ctx.connection.rpc.handle(
-  "/grok-auth",
-  handler,
-  { authority: "loopback" },
-)
+for (const route of createAuthFetchRoutes(handler, clientRequestSchema)) {
+  ctx.connection.fetch.register(route)
+}
 ```
+
+六个精确 POST 路由位于主机认证的共享 `/api` carrier 之下（`/api/grok-auth/<method>`，`requestBody: "buffered"`），浏览器用 `connection.rpc.call("/api", "grok-auth/<method>", payload)` 调用；路由由 fiber 拥有并在卸载时移除。不要注册独立的、无主机认证的 HTTP handler，也不要使用已删除的自定义 channel `rpc.handle`。
 
 闭合方法：
 
@@ -190,7 +217,7 @@ ctx.connection.rpc.handle(
 
 `status`、`diagnostics`、`login`、`logout` 只接受空对象；`cancel` 只接受当前公开状态中的 `sessionId`。不存在 `authMode`、模式选择、OAuth URL、device code、access/refresh token、identity 或 token endpoint 字段。
 
-`diagnostics` 与登录 `status` 轮询分离，只在页面首次打开、用户主动重新检测或登录结算后调用。同一 inspector 的并发调用只运行一个有界检测；subprocess capability teardown 会取消并等待它。若进程树无法确认退出，该 CLI 实例锁存为 `unavailable`、取消同实例的在途认证 action，并移除对应 driver，直到 capability 被替换。它返回 `pluginVersion` 与闭合 CLI 状态：`ready` 表示默认 executable、安全单行 `grok --version` 和独立 `--oauth` 能力均通过，并额外携带提取后的版本号；其他状态只能是 `missing`、`invalid` 或 `unavailable`。不得返回可执行路径、stderr、环境变量、代理地址或上游 URL。renderer 的登录轮询串行调度并使用单调 request epoch，必须拒绝旧 generation/session、旧 epoch 或 effect cleanup 后的响应回写。
+`diagnostics` 与登录 `status` 轮询分离，只在页面首次打开、用户主动重新检测或登录结算后调用。同一 inspector 的并发调用只运行一个有界检测；subprocess capability teardown 会取消并等待它。若进程树无法确认退出，该 CLI 实例锁存为 `unavailable`、取消同实例的在途认证 action，并移除对应 driver，直到 capability 被替换。它返回 `pluginVersion`、闭合 CLI 状态与闭合 `network` 路线：`ready` 表示默认 executable、安全单行 `grok --version` 和独立 `--oauth` 能力均通过，并额外携带提取后的版本号；其他状态只能是 `missing`、`invalid` 或 `unavailable`。不得返回可执行路径、stderr、环境变量、代理地址或上游 URL。renderer 的登录轮询串行调度并使用单调 request epoch，必须拒绝旧 generation/session、旧 epoch 或 effect cleanup 后的响应回写。
 
 登录失败状态可额外携带一个闭合 `reason`：`cli-missing`、`cli-invalid`、`auth-network-timeout`、`login-timeout` 或 `cli-failed`。只有固定 OIDC discovery 地址与 timeout 特征同时匹配时才能投影为 `auth-network-timeout`；其他上游文本折叠为 `cli-failed`，renderer 不能取得原始输出。
 
@@ -201,7 +228,7 @@ ctx.connection.rpc.handle(
 ```ts
 type AuthOutcome =
   | { kind: "status"; status: PublicAuthStatus }
-  | { kind: "diagnostics"; diagnostics: { pluginVersion: string; cli: { state: "ready"; version: string } | { state: "missing" | "invalid" | "unavailable" } } }
+  | { kind: "diagnostics"; diagnostics: { pluginVersion: string; cli: { state: "ready"; version: string } | { state: "missing" | "invalid" | "unavailable" }; network: "environment" | "disabled" | "proxy" | "proxy-unavailable" | "proxy-invalid" } }
   | { kind: "login-started"; status: PublicAuthStatus; sessionId: string }
   | { kind: "logout-confirmation-required"; confirmationId: string; expiresAt: string }
   | { kind: "busy"; status: PublicAuthStatus; diagnosticId: string }
@@ -239,6 +266,7 @@ bundle ID 必须由最终 `package.json.name` 在构建时注入，不能在包�
 
 - `@deepseek-ai/dsh-client-ui-renderer`
 - `@deepseek-ai/dsh-client-ui-settings`
+- `@deepseek-ai/dsh-client-ui-slots`
 - `@deepseek-ai/dsh-client-locale`
 - `@deepseek-ai/dsh-client-connection`
 
@@ -266,6 +294,7 @@ bundle ID 必须由最终 `package.json.name` 在构建时注入，不能在包�
       "inject": [
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-connection"
       ]
@@ -276,9 +305,9 @@ bundle ID 必须由最终 `package.json.name` 在构建时注入，不能在包�
 
 rc.2 的 Host 端 client-module scanner 会执行 `require.resolve("<package>/package.json")` 读取 `dsh.client` 声明，因此 `./package.json` 是 Web bundle 可发现性的必要公开元数据入口；缺失时 Host 插件仍可挂载，但浏览器启动图不会包含该包。
 
-client bundle 导出 Cordis `inject` 与 `apply`，所需 services 至少为 `slots`、`locale`、`connection`。设置页通过 `ctx.slots.inject("settings.section", () => ctx.slots.register(...))` 注册。
+client bundle 导出 Cordis `inject` 与 `apply`，所需 services 至少为 `slots`、`locale`、`connection` 与设置域的 `configForms`。设置页通过 `ctx.slots.inject("settings.section", () => ctx.slots.register({...}, Component))` 注册，开关读写通过 `ctx.configForms.get("llm-grok")`（`getSnapshot`/`subscribe`/`set`/`mutate`/`dispose`，快照为 `{ status, value, base, user, revision, writable, mode }`），controller 由 effect 持有并在卸载时 `dispose()`。
 
-Harness `0.1.2-rc.1` 的 `settings.section` options 只有 `id`、`order` 与 `label`，没有图标字段；未知 section id 会由设置 shell 显示 `IconSettingsOutline16`。Provider 可用独立、effect-owned 的视觉兼容层，将结构和规范化标签均唯一精确匹配的 `Grok Build` 导航按钮标记为内嵌的 `IconThinkOutline16` 路径几何。该层不是 Host DOM API：只能在本地读取设置导航标签用于匹配，不得读取设置页正文或用户内容、不得模糊匹配其他按钮，也不得外传或发起网络请求；歧义或结构不符时保留宿主齿轮。独立 style 必须显式带本插件的 `data-plugin` ownership，避免被其他 bundle 的 materialize/HMR 认领和删除。唯一 MutationObserver 必须过滤无关页面变化、合并同轮更新，并在最后一个 effect disposer 中停用待执行任务、断开 observer、移除 marker/style。
+Harness `0.2.0-rc.2` 的 `settings.section` options 只有 `id`、`order` 与 `label`，没有图标字段；未知 section id 会由设置 shell 显示 `IconSettingsOutline16`。Provider 可用独立、effect-owned 的视觉兼容层，将结构和规范化标签均唯一精确匹配的 `Grok Build` 导航按钮标记为内嵌的 `IconThinkOutline16` 路径几何。该层不是 Host DOM API：只能在本地读取设置导航标签用于匹配，不得读取设置页正文或用户内容、不得模糊匹配其他按钮，也不得外传或发起网络请求；歧义或结构不符时保留宿主齿轮。独立 style 必须显式带本插件的 `data-plugin` ownership，避免被其他 bundle 的 materialize/HMR 认领和删除。唯一 MutationObserver 必须过滤无关页面变化、合并同轮更新，并在最后一个 effect disposer 中停用待执行任务、断开 observer、移除 marker/style。
 
 三类依赖必须分开：`dsh.client.inject` 只列提供所需 Cordis service 的 client plugin；bundle 动态 `require()` 且不是平台 seed 的 package 列入 `dsh.client.external`；React、UI primitives 等 Runtime 平台 seed 不进入 inject。Host/client 的真实静态和动态 import 图决定 peer 与 external，不能把所有 bundle require 一律塞进 inject。
 

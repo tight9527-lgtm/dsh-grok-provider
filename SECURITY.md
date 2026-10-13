@@ -4,7 +4,11 @@
 
 ## 支持范围
 
-本安全策略对应 `dsh-grok-provider@1.0.6` 制品。账户操作使用 DSH `0.1.5-rc.2` 的共享 `/api` 精确 POST 路由；浏览器会话认证、Host/Origin 检查和请求体限制由主机保留。请求使用主机 schema 校验并拒绝路径/方法不匹配。官方 CLI 凭据、固定 xAI origin、Search、工具权限和流后不重放规则保持不变。Windows 真机外部浏览器弹出仍未验收。
+本安全策略对应 `dsh-grok-provider@2.1.0` 制品。账户操作使用 DSH `0.2.0-rc.2` 的共享 `/api` 精确 POST 路由；浏览器会话认证、Host/Origin 检查和请求体限制由主机保留。请求使用主机 schema 校验并拒绝路径/方法不匹配。官方 CLI 凭据、固定 xAI origin、Search、工具权限和流后不重放规则保持不变。Windows 真机外部浏览器弹出仍未验收。
+
+`2.1.0` 只支持 Harness `0.2.0` 系列，并把图片上限改为宿主决策：路由声明 counted/represented 预算，超出即以 `IMAGE_OFFLOAD_REQUIRED` 与 `offloadImages` 计数失败；被宿主记录为 `offloaded` 的图片只发送固定占位文本，插件不再自行丢弃图片字节，也不会在宿主未授权时重放更旧的图片。设置命名空间为 profile 条目 id `llm-grok`，可写字段在 `Config` 中以 `.volatile()` 声明；浏览器页只经设置域 `configForms` 读写，不接触凭据、CLI 路径或 base URL。`1.0.x` 在 `0.2.0` 宿主上无法加载，因此不存在降级可用的旧版行为。
+
+`2.1.0` 新增的出网代理由用户显式配置，且只作用于本插件自身的 Grok 请求：地址仅接受不含用户名密码的 `http:`/`https:` URL，代理地址不进入日志、诊断或请求内容（诊断只报告闭集路线种类 `network`）；插件不改动宿主进程的全局 dispatcher，启动环境已提供 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 时一律以环境为准。本机代理（loopback）未监听时回退直连；非本机代理不做探测也不回退，不可用时失败关闭，避免把本应经代理发送的流量改为直发。插件仍不解析、不修复 Windows 系统代理。
 
 `1.0.3` 不把 HTTP 401/403 解释为 API Key 模式，也不自行刷新 OAuth grant：固定且有界的官方 `grok models` 子进程拥有刷新行为，插件随后重新读取并严格校验共享凭据。第二次拒绝仍为 `AUTH`。SSE source 的无状态 transport failure 和干净过早 EOF 与畸形事件分开；只有前两者能进入安全部分输出保留，status-bearing transport error、工具调用和所有 `INVALID_RESPONSE` 均不得被吞掉。部分内容不生成 replay metadata，提示不包含上游错误正文。
 
@@ -16,7 +20,7 @@
 
 `1.0.2` 的发布回读已关闭：最终 release commit `be200f9352afe93b27dd2856d89c01674f0cd637`，annotated tag object `b7efd3aabb99c73e1747d2d87890cdf9b284c438`，macOS 14 / Windows 2022 final CI run `33318426571`，Trusted Publisher run `33319150964` attempt 1。仓库所有者明确授权的唯一 74 文件制品为 255,282 bytes packed / 789,962 bytes unpacked，SHA-1 `3feddb7048fe4c796037804518999b12ae491802`、SHA-256 `010a21770cb3e4e42b7195984df1f5bf8dc5027066198cf99b7d713ac045f605`、SRI `sha512-TcvvPUXBJZEA728pVnUrXSZebGfIoB5ATG5041wA1OFzOE+hFTO98C5Fxl99WuFW2y7V89gkusYIKCpGlLNQIg==`；冻结候选、GitHub Release asset 与 npm Registry tarball 逐字节一致，npm `latest=1.0.2`。锁定隔离安装、本包 1 个 Registry signature / 2 个 package attestations、安装图 11 个 signed / 2 个 attested packages，以及精确绑定 `release.yml` / `refs/tags/v1.0.2` / release commit / publish run 的 SLSA provenance 均已验证。候选源码的真实账号验收只保留 Web `5/1/0/1/1` 与 X `3/1/0/1/1` 的 Search/non-empty-reasoning/empty-reasoning/non-empty-text/finish 计数；不保存内容、URL、身份、凭据或原始响应。上述证据均不构成 OAuth、完整桌面会话或网络可达 Windows 真机外部浏览器弹出验收。
 
-`1.0.6` 沿用已发布版本的图片边界：只为精确 `grok-4.6` 提供有界图片输入；`grok-4.5` 与所有其他模型保持 text-only。普通 user/system 历史中的私有 reasoning 会被省略并保留相邻可见 text/image；只有有效的同 Provider assistant 历史可进入加密 reasoning replay，一层 tool-result 仍只接受公开 text/image。图片只能来自 Harness attachment service 的已验证 JPEG/PNG/WebP 投影；WebP 在发送前转为 PNG/JPEG，以 `detail:"high"` 发送，并受单图字节、像素、边长、数量、总字节与最终 JSON 上限约束；URL、路径、file ID 和调用方预制 data URL 都会被拒绝。
+`2.1.0` 沿用已发布版本的图片边界：只为精确 `grok-4.6` 提供有界图片输入；`grok-4.5` 与所有其他模型保持 text-only。普通 user/system 历史中的私有 reasoning 会被省略并保留相邻可见 text/image；只有有效的同 Provider assistant 历史可进入加密 reasoning replay，一层 tool-result 仍只接受公开 text/image。图片只能来自 Harness attachment service 的已验证 JPEG/PNG/WebP 投影；WebP 在发送前转为 PNG/JPEG，以 `detail:"high"` 发送，并受单图字节、像素、边长、数量、总字节与最终 JSON 上限约束；URL、路径、file ID 和调用方预制 data URL 都会被拒绝。预算以 base64 表示长度计算，与序列化请求上限共用常量；数量上限在任何附件字节读取之前判定。
 
 `0.1.7` 的闭合运行时诊断、CLI 安装恢复、OIDC timeout 脱敏结算和 `IconThinkOutline16` 兼容层在本版保持不变。官方 CLI 仍负责生成登录 URL 与打开外部浏览器；插件不修复系统 DNS、代理、防火墙、VPN 或 CLI 行为。
 

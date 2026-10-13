@@ -7,6 +7,7 @@ import { createAuthRpcHandler } from "../../../src/internal/auth-rpc.mjs"
 const fixtureDiagnostics = async () => ({
   pluginVersion: "0.1.6",
   cli: { state: "ready", version: "1.0.5" },
+  network: "proxy",
 })
 
 test("the Web auth RPC accepts only closed payloads and never throws controller failures", async () => {

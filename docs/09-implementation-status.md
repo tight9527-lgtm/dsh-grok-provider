@@ -1,5 +1,33 @@
 # 当前实现与发布状态
 
+## 2.1.0 / DSH 0.2.0-rc.2
+
+**未发布**。当前源码版本为 `dsh-grok-provider@2.1.0`，只支持 DeepSeek Harness `0.2.0` 系列；`1.0.x` 在 `0.2.0-rc.2` 宿主上无法加载。
+
+`2.1.0` 在 `2.0.1` 移植之上新增**设置页出网代理**：`Config` 增加 `proxyEnabled`（默认 `true`）与 `proxyUrl`（默认 `http://127.0.0.1:7897`），设置页新增“网络代理”分区（开关 + 地址 + 保存 + 当前路线）。路由为插件作用域：每次请求解析一次，命中时用 `undici` 的 `ProxyAgent` 作为该请求自己的 dispatcher，从不调用 `setGlobalDispatcher`。启动环境已有 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 时不叠加（环境优先）；地址只接受不含凭据的 `http:`/`https:` URL；本机代理未监听时回退直连（探测缓存 30 s，代理连接级失败立即作废），非本机代理不探测不回退、失败关闭。`diagnostics` 增加闭集 `network` 字段（`environment`/`disabled`/`proxy`/`proxy-unavailable`/`proxy-invalid`），仍不携带代理地址。新增运行期依赖 `undici ^8.10.0`。设计与证据见 [ADR-0014](adr/0014-plugin-scoped-outbound-proxy.md)。
+
+本地门禁为 297 tests、295 pass、0 fail、2 platform skips。真实账号实测（清空 `HTTPS_PROXY`/`HTTP_PROXY` 后强制走插件自有路由）：`route state=proxy`，dashboard 返回 `models.state=ready`（4 个模型：`grok-4.7`、`grok-4.7-build-fast`、`grok-4.6`、`grok-4.5`）与 `quota.state=ready`。本机 profile 已装 `dsh-grok-provider-2.1.0.tgz`（86 文件、318,604 bytes、SHA-256 `23358b5328592d56a0ecabdf663c02b23bfa67a9f32980887684b9c62570c15a`），四个关键文件与仓库产物逐字节一致，`undici` 由 profile 提升解析，安装后入口在桌面 runtime Node `24.21.0` 上加载正常。桌面端需重启后才会挂载 2.1.0。
+
+## 2.0.1 / DSH 0.2.0-rc.2
+
+迁移完成。`1.0.x` 在 `0.2.0-rc.2` 宿主上无法加载。
+
+Harness `0.2.0-rc.2` 删除了三处 `1.0.x` 依赖的 API，因此本版不是可选升级：
+
+- `@deepseek-ai/dsh-llm` 不再导出 `offloadRequestImagesWithPolicy`。宿主入口在 ESM link 阶段即失败（`does not provide an export named 'offloadRequestImagesWithPolicy'`），`apply` 从未运行。改为路由声明 base64 表示预算，超限时以 `IMAGE_OFFLOAD_REQUIRED` + `offloadImages` 失败，由 `dsh-compaction-image-offload` 落持久 `image/offload` 决策后重试；被标记 `offloaded` 的 occurrence 发送 `offloadedImageText` 占位文本。occurrence 上限在任何附件读取之前判定。
+- `@deepseek-ai/dsh-settings` 不再提供 `ctx.settings.installSection`。命名空间改为 profile 条目 id `llm-grok`，表单从本插件 `Config` 派生，`webSearch`/`xSearch` 标 `.volatile()` 并在调用时经实时引用读取；插件以 `ctx.settings.configure({ auto: false }, ctx.fiber)` 声明自带页面。
+- 客户端不再有 `settingsScope` service。设置页改用设置域共享的 `ctx.configForms.get("llm-grok")`，保留 ready/writable/只读失败关闭、串行写保护与 effect-owned 卸载清理。
+
+peer 与开发依赖对齐 `0.2.0-rc.2`（Cordis `^4.0.4`、Schemastery `^3.18.4`），`dsh.client.inject` 增加 `@deepseek-ai/dsh-client-ui-slots`。
+
+本地门禁（Windows x64，Node `24.21.0`，桌面端 `0.2.0-rc.2` 包树）：284 tests、282 pass、0 fail、2 platform skips，与 `0.1.5-rc.2` 基线同形。迁移前的同一导入探针复现 ESM link 失败，迁移后正常返回 `name`/`inject`/两个 volatile 字段。设计取舍、证据与未验证项见 [ADR-0013](adr/0013-dsh-0.2.0-settings-and-image-offload.md)。
+
+本机桌面 profile 已切换为这份本地构建：`npm pack` 产出 `C:\Users\Lenovo\.dsh\local-packages\dsh-grok-provider-2.1.0.tgz`（84 文件、298,909 bytes），profile 依赖改为 `file:` 该 tarball，并把 `dsh-grok-provider` 加入 `dsh.profile.bundles` 以激活其 bundle 层。安装后 `node_modules/dsh-grok-provider` 的 `dist/host/index.mjs`、`dist/client/client.js`、`grok-provider.patch.yml`、`package.json` 与仓库产物逐字节一致，profile 的 14 个依赖全部可解析；用独立 dsh `0.2.0-rc.2` 组合等价 profile 副本时，组合树中出现 `# == dsh-grok-provider` 与 `id: llm-grok`。桌面端重启后宿主插件与设置页均已挂载。安装时 profile 既有的 3 个 24 小时内发布条目（dompurify、dsh-pocket、dshmarket）触发 `minimumReleaseAge` 供应链门禁，pnpm 据此以退出码 1 结束，但链接与 manifest/lockfile 更新均已完成，其它依赖未受影响。
+
+重启后账号面板一度报“读不到额度/模型”，已定位为**环境问题、非本版回归**：三条上游调用走宿主 `fetch`，而 Node 的 `fetch` 不读 Windows 系统代理（Clash `127.0.0.1:7897`），本机全局只有 `NO_PROXY` 与 `NODE_USE_ENV_PROXY=1`。实测直连 `UND_ERR_CONNECT_TIMEOUT`、加 `HTTPS_PROXY` 后 `401`、启动器式 dispatcher 安装同样得到 `401`；带代理后完整 dashboard 返回 `models.state=ready`（4 个模型）与 `quota.state=ready`（weekly、含百分比）。处置：新增 `~/.dsh/dsh-desktop-proxy.cmd` 在启动环境里注入代理变量；中英文 README 增加“代理与网络”排查段。插件自身不解析系统代理，继续使用 `globalThis.fetch`，由 Harness 启动器统一安装 undici dispatcher。
+
+未验证：未通过对话发起 `/v1/responses` 生成；未做 Windows 真机浏览器登录验收；未发布到 npm。
+
 ## 1.0.5 / DSH 0.1.5-rc.2
 
 发布完成：npm `latest=1.0.5`；最终提交 `49f08ba62bd9eb77fbf122413e08f28fc56d7207`，双平台 CI `34734335106`，Trusted Publisher `34734462191`。唯一 81 文件制品的 SHA-256 为 `7e4772a8335ed9560db2ed59a34b9154f3f1ddc1a60be9707443648d6a72e77f`；Release/Registry 字节一致，Registry 安装、签名和 SLSA provenance 已验证。详见 [发布检查表](10-release-checklist.md)。

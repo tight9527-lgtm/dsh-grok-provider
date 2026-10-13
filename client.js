@@ -35,6 +35,19 @@ window.__ModuleLoader__.load({
         searchEnabled: "已开启", searchDisabled: "已关闭", searchLoading: "正在读取搜索设置…",
         searchUnavailable: "搜索设置暂时不可用；开关不可操作，也不会写入未知值。", searchReadOnly: "当前搜索设置不可写。",
         searchSaveFailed: "搜索设置保存失败，已保留 Host 当前值。",
+        proxyTitle: "网络代理",
+        proxyDescription: "Node 的 fetch 不读 Windows 系统代理，只认 HTTP(S)_PROXY 环境变量；本机用 Clash 之类的本地代理出网时，请在这里填写代理地址。仅影响本插件的 Grok 请求，不改动宿主进程的其它流量。",
+        proxyEnabled: "启用代理", proxyEnabledDescription: "开启后，Grok 的模型目录、额度与对话请求都经由下面的地址发出。",
+        proxyAddress: "代理地址", proxyAddressDescription: "形如 http://127.0.0.1:7897；不接受带用户名密码的地址。",
+        proxySave: "保存地址", proxySaving: "保存中…", proxySaveFailed: "代理设置保存失败，已保留 Host 当前值；请确认地址形如 http://主机:端口。",
+        proxyCurrent: "当前网络：",
+        networkEnvironment: "由宿主环境变量统一代理",
+        networkProxy: "经代理 ",
+        networkProxyUnavailable: "直连（未检测到本机代理，已自动回退直连）",
+        networkProxyInvalid: "直连（代理地址无效，已按直连处理）",
+        networkDisabled: "直连（代理已关闭）",
+        networkUnknown: "读取中…",
+        proxyFallbackHint: "本机代理（127.0.0.1 / localhost）未监听时会自动回退直连；非本机代理不可用时失败关闭，不会绕过代理直发。宿主的 HTTP_PROXY / HTTPS_PROXY 始终优先于本设置。",
         modelsTitle: "当前账号可用的模型", modelsDescription: "模型来自 Grok Build 动态目录；Harness 模型选择器会显示这里列出的全部模型。",
         modelsUnavailable: "暂时无法读取模型目录。", noModels: "当前账号没有返回可用模型。",
         context: "上下文", reasoning: "推理档位", defaultEffort: "默认", text: "文本输入", image: "图片输入", streaming: "流式输出", tools: "工具调用",
@@ -68,22 +81,24 @@ window.__ModuleLoader__.load({
         searchEnabled: "On", searchDisabled: "Off", searchLoading: "Reading Search settings…",
         searchUnavailable: "Search settings are temporarily unavailable. Controls are disabled and no unknown value will be written.", searchReadOnly: "Search settings are currently read-only.",
         searchSaveFailed: "Search settings could not be saved. The current Host value was preserved.",
+        proxyTitle: "Network proxy",
+        proxyDescription: "Node's fetch reads neither the Windows system proxy nor any application setting — only HTTP(S)_PROXY environment variables. When this machine reaches the internet through a local proxy such as Clash, enter its address here. It applies to this plugin's Grok requests only and never changes other traffic in the host process.",
+        proxyEnabled: "Use proxy", proxyEnabledDescription: "When on, the model catalog, quota, and conversation requests all leave through the address below.",
+        proxyAddress: "Proxy address", proxyAddressDescription: "For example http://127.0.0.1:7897; credentials in the address are not accepted.",
+        proxySave: "Save address", proxySaving: "Saving…", proxySaveFailed: "The proxy setting could not be saved and the current Host value was preserved; check that the address looks like http://host:port.",
+        proxyCurrent: "Current network: ",
+        networkEnvironment: "proxied by the host environment",
+        networkProxy: "through ",
+        networkProxyUnavailable: "direct (no local proxy detected; fell back to a direct connection)",
+        networkProxyInvalid: "direct (the proxy address is unusable, so requests go direct)",
+        networkDisabled: "direct (proxy turned off)",
+        networkUnknown: "reading…",
+        proxyFallbackHint: "A local proxy (127.0.0.1 / localhost) that is not listening falls back to a direct connection; an unreachable non-local proxy fails closed instead of bypassing the proxy. The host's HTTP_PROXY / HTTPS_PROXY always take precedence over this setting.",
         modelsTitle: "Models available to this account", modelsDescription: "Models come from the live Grok Build catalog; every model listed here remains visible in the Harness model selector.",
         modelsUnavailable: "The model catalog is temporarily unavailable.", noModels: "This account returned no available models.",
         context: "Context", reasoning: "Reasoning", defaultEffort: "default", text: "Text input", image: "Image input", streaming: "Streaming", tools: "Tool calling",
         lastUpdated: "Updated",
       },
-    }
-
-    function decodeSearchConfig(value) {
-      if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
-      const webSearch = Object.getOwnPropertyDescriptor(value, "webSearch")
-      const xSearch = Object.getOwnPropertyDescriptor(value, "xSearch")
-      if (
-        !webSearch || !("value" in webSearch) || typeof webSearch.value !== "boolean"
-        || !xSearch || !("value" in xSearch) || typeof xSearch.value !== "boolean"
-      ) return undefined
-      return Object.freeze({ webSearch: webSearch.value, xSearch: xSearch.value })
     }
 
     const navIconMarker = "data-dsh-grok-provider-nav-icon"
@@ -206,6 +221,7 @@ window.__ModuleLoader__.load({
       .dsh-grok-search-head h3{margin:0;font-size:16px;line-height:24px}.dsh-grok-search-head p{margin:5px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px}.dsh-grok-search-list{margin-top:14px;border-top:1px solid rgb(190 93 138 / 18%)}.dsh-grok-search-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px;padding:14px 0;border-bottom:1px solid rgb(190 93 138 / 18%)}.dsh-grok-search-copy strong{display:block;font-size:13px;line-height:20px}.dsh-grok-search-copy p{margin:3px 0 0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:18px}.dsh-grok-switch{position:relative;width:44px;height:25px;flex:none;border:0;border-radius:999px;padding:0;background:var(--dsw-alias-interactive-bg-hover);cursor:pointer;transition:background .18s ease}.dsh-grok-switch::after{content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;background:var(--dsw-alias-bg-layer-1);box-shadow:0 1px 3px rgb(0 0 0 / 18%);transition:transform .18s ease}.dsh-grok-switch[data-checked="true"]{background:var(--dsw-static-deepseek-500,#4d6bfe)}.dsh-grok-switch[data-checked="true"]::after{transform:translateX(19px)}.dsh-grok-switch:disabled{cursor:default;opacity:.48}.dsh-grok-search-risk{margin:13px 0 0;padding:11px 12px;border-radius:10px;color:var(--dsw-alias-label-secondary);background:rgb(217 155 43 / 8%);font-size:11px;line-height:18px}.dsh-grok-search-status{margin:11px 0 0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:18px}.dsh-grok-visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;clip-path:inset(50%)}
       .dsh-grok-models-head{padding:20px 20px 0}.dsh-grok-models-head h3{margin:0;font-size:16px;line-height:24px}.dsh-grok-models-head p{margin:5px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px}.dsh-grok-model-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:16px 20px 20px}.dsh-grok-model{min-width:0;border:1px solid var(--dsw-alias-border-l2);border-radius:13px;padding:14px;background:var(--dsw-alias-bg-layer-1)}.dsh-grok-model-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.dsh-grok-model-title strong{overflow-wrap:anywhere;font-size:14px}.dsh-grok-model-id{overflow-wrap:anywhere;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.dsh-grok-model-description{margin:5px 0 10px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px}.dsh-grok-badges{display:flex;flex-wrap:wrap;gap:5px}.dsh-grok-badge{border-radius:999px;padding:2px 8px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover);font-size:10px;line-height:18px}.dsh-grok-badge[data-accent="true"]{color:#a9326b;background:rgb(215 68 138 / 11%)}.dsh-grok-efforts{margin-top:10px;color:var(--dsw-alias-label-secondary);font-size:10px;line-height:17px}.dsh-grok-footer{padding:0 20px 16px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:10px}
       .dsh-grok-notice{padding:13px 14px;border:1px solid rgb(229 72 77 / 28%);border-radius:11px;color:var(--dsw-alias-label-secondary);background:rgb(229 72 77 / 7%);font-size:12px;line-height:19px}.dsh-grok-error{margin:10px 0 0;color:var(--dsw-static-red-500,#e5484d);font-size:12px;line-height:19px}
+      .dsh-grok-proxy-form{margin-top:14px;border-top:1px solid rgb(190 93 138 / 18%);padding-top:14px}.dsh-grok-proxy-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;margin-top:9px}.dsh-grok-input{width:100%;min-width:0;box-sizing:border-box;height:34px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;padding:0 11px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.dsh-grok-input:disabled{cursor:default;opacity:.55}
       @media(max-width:680px){.dsh-grok-panel-inner,.dsh-grok-models-head{padding:16px}.dsh-grok-model-grid{grid-template-columns:1fr;padding:14px 16px 16px}.dsh-grok-account-head{align-items:flex-start;flex-direction:column}.dsh-grok-quota-row{align-items:flex-start;flex-direction:column;gap:3px}}
     `
     if (!document.querySelector('style[data-plugin-css="dsh-grok-provider"]')) {
@@ -215,7 +231,7 @@ window.__ModuleLoader__.load({
       document.head.appendChild(style)
     }
 
-    function GrokSettings({ connection, t, searchSettings }) {
+    function GrokSettings({ connection, t, pluginSettings }) {
       const [status, setStatus] = React.useState()
       const [dashboard, setDashboard] = React.useState()
       const [busy, setBusy] = React.useState(false)
@@ -226,22 +242,24 @@ window.__ModuleLoader__.load({
       const [diagnosticsError, setDiagnosticsError] = React.useState(false)
       const [statusEpoch] = React.useState(() => ({ value: 0 }))
       const [diagnosticsEpoch] = React.useState(() => ({ value: 0 }))
-      const [searchSnapshot, setSearchSnapshot] = React.useState(() => searchSettings.getSnapshot())
-      const [searchSaving, setSearchSaving] = React.useState()
+      const [configSnapshot, setConfigSnapshot] = React.useState(() => pluginSettings.getSnapshot())
+      const [configSaving, setConfigSaving] = React.useState()
       const [searchSaveError, setSearchSaveError] = React.useState(false)
-      const [searchWrite] = React.useState(() => ({ field: undefined }))
+      const [proxySaveError, setProxySaveError] = React.useState(false)
+      const [proxyUrlDraft, setProxyUrlDraft] = React.useState()
+      const [configWrite] = React.useState(() => ({ field: undefined }))
       React.useEffect(() => {
         let active = true
         const publish = () => {
-          if (active) setSearchSnapshot(searchSettings.getSnapshot())
+          if (active) setConfigSnapshot(pluginSettings.getSnapshot())
         }
-        const unsubscribe = searchSettings.subscribe(publish)
+        const unsubscribe = pluginSettings.subscribe(publish)
         publish()
         return () => {
           active = false
           unsubscribe()
         }
-      }, [searchSettings])
+      }, [pluginSettings])
       const call = React.useCallback(async (endpoint, payload = {}) => {
         const result = await connection.rpc.call("/api", `grok-auth/${endpoint}`, payload)
         if (!result || result.ok !== true) throw new Error("Grok account RPC failed")
@@ -356,30 +374,61 @@ window.__ModuleLoader__.load({
         statusEpoch.value += 1
         await Promise.all([refreshStatus({ includeDashboard: true }), refreshDiagnostics()])
       })
-      const updateSearchSetting = async (field, enabled) => {
-        const current = searchSettings.getSnapshot()
+      const writeConfig = async (field, value, { expectedType, onSettled, onFailure }) => {
+        const current = pluginSettings.getSnapshot()
         if (
           current.status !== "ready" || current.writable !== true
-          || typeof current.value?.[field] !== "boolean" || current.value[field] === enabled
-          || searchWrite.field !== undefined
-        ) return
-        searchWrite.field = field
-        setSearchSaving(field)
-        setSearchSaveError(false)
+          || typeof current.value?.[field] !== expectedType
+          || current.value[field] === value
+          || configWrite.field !== undefined
+        ) return false
+        configWrite.field = field
+        setConfigSaving(field)
         try {
-          await searchSettings.set(field, enabled)
-          const settled = searchSettings.getSnapshot()
-          if (
-            settled.status !== "ready"
-            || typeof settled.value?.[field] !== "boolean"
-            || settled.value[field] !== enabled
-          ) setSearchSaveError(true)
+          await pluginSettings.set(field, value)
+          const settled = pluginSettings.getSnapshot()
+          const accepted = settled.status === "ready"
+            && typeof settled.value?.[field] === expectedType
+            && settled.value[field] === value
+          if (!accepted) onFailure()
+          else onSettled?.()
+          return accepted
         } catch {
-          setSearchSaveError(true)
+          onFailure()
+          return false
         } finally {
-          searchWrite.field = undefined
-          setSearchSaving(undefined)
+          configWrite.field = undefined
+          setConfigSaving(undefined)
         }
+      }
+      const updateSearchSetting = (field, enabled) => {
+        setSearchSaveError(false)
+        return writeConfig(field, enabled, {
+          expectedType: "boolean",
+          onFailure: () => setSearchSaveError(true),
+        })
+      }
+      const updateProxyEnabled = (enabled) => {
+        setProxySaveError(false)
+        return writeConfig("proxyEnabled", enabled, {
+          expectedType: "boolean",
+          onFailure: () => setProxySaveError(true),
+        })
+      }
+      const saveProxyUrl = async () => {
+        setProxySaveError(false)
+        const draft = typeof proxyUrlDraft === "string" ? proxyUrlDraft.trim() : undefined
+        // Refused here as well as in the Host, so an obvious typo never leaves
+        // the page as a stored value.
+        if (draft === undefined || draft === "" || !/^https?:\/\/[^\s]+$/iu.test(draft)) {
+          setProxySaveError(true)
+          return
+        }
+        await writeConfig("proxyUrl", draft, {
+          expectedType: "string",
+          onSettled: () => setProxyUrlDraft(undefined),
+          onFailure: () => setProxySaveError(true),
+        })
       }
 
       if (!connection.isLoopback) return React.createElement("section", { className: "dsh-grok-page" },
@@ -447,14 +496,27 @@ window.__ModuleLoader__.load({
           effortText && React.createElement("div", { className: "dsh-grok-efforts" }, `${t("reasoning")}：${effortText}`))
       }
 
-      const searchReady = searchSnapshot.status === "ready"
-      const searchWritable = searchReady && searchSnapshot.writable === true
-      const searchStatus = searchSnapshot.status === "loading" ? t("searchLoading")
-        : searchSnapshot.status !== "ready" ? t("searchUnavailable")
-          : !searchWritable ? t("searchReadOnly") : undefined
+      const configReady = configSnapshot.status === "ready"
+      const configWritable = configReady && configSnapshot.writable === true
+      const configStatus = configSnapshot.status === "loading" ? t("searchLoading")
+        : configSnapshot.status !== "ready" ? t("searchUnavailable")
+          : !configWritable ? t("searchReadOnly") : undefined
+      const searchReady = configReady
+      const searchWritable = configWritable
+      const searchStatus = configStatus
+      const proxyEnabled = searchReady && configSnapshot.value?.proxyEnabled === true
+      const proxyUrl = typeof configSnapshot.value?.proxyUrl === "string" ? configSnapshot.value.proxyUrl : ""
+      const proxyDraft = proxyUrlDraft ?? proxyUrl
+      const proxyDisabled = !configWritable || configSaving !== undefined
+      const network = diagnostics?.network
+      const networkLabel = network === "environment" ? t("networkEnvironment")
+        : network === "proxy" ? `${t("networkProxy")}${proxyUrl}`
+          : network === "proxy-unavailable" ? t("networkProxyUnavailable")
+            : network === "proxy-invalid" ? t("networkProxyInvalid")
+              : network === "disabled" ? t("networkDisabled") : t("networkUnknown")
       const renderSearchSetting = (field, labelKey, descriptionKey) => {
-        const enabled = searchReady && searchSnapshot.value?.[field] === true
-        const disabled = !searchWritable || searchSaving !== undefined
+        const enabled = searchReady && configSnapshot.value?.[field] === true
+        const disabled = !searchWritable || configSaving !== undefined
         return React.createElement("div", { className: "dsh-grok-search-row", key: field },
           React.createElement("div", { className: "dsh-grok-search-copy" },
             React.createElement("strong", null, t(labelKey)),
@@ -462,7 +524,7 @@ window.__ModuleLoader__.load({
           React.createElement("button", {
             className: "dsh-grok-switch", type: "button", role: "switch",
             "aria-checked": enabled, "aria-label": `${t(labelKey)}：${t(enabled ? "searchEnabled" : "searchDisabled")}`,
-            "data-checked": enabled, disabled, onClick: () => updateSearchSetting(field, !enabled),
+            "data-checked": enabled, "data-field": field, disabled, onClick: () => updateSearchSetting(field, !enabled),
           }, React.createElement("span", { className: "dsh-grok-visually-hidden" }, t(enabled ? "searchEnabled" : "searchDisabled"))))
       }
 
@@ -508,6 +570,41 @@ window.__ModuleLoader__.load({
             React.createElement("p", { className: "dsh-grok-search-risk" }, t("searchRisk")),
             searchStatus && React.createElement("p", { className: "dsh-grok-search-status", role: "status", "aria-live": "polite" }, searchStatus),
             searchSaveError && React.createElement("p", { className: "dsh-grok-error", role: "alert" }, t("searchSaveFailed")))),
+          React.createElement("article", { className: "dsh-grok-panel" }, React.createElement("div", { className: "dsh-grok-panel-inner" },
+            React.createElement("div", { className: "dsh-grok-search-head" },
+              React.createElement("h3", null, t("proxyTitle")), React.createElement("p", null, t("proxyDescription"))),
+            React.createElement("div", { className: "dsh-grok-search-list" },
+              React.createElement("div", { className: "dsh-grok-search-row" },
+                React.createElement("div", { className: "dsh-grok-search-copy" },
+                  React.createElement("strong", null, t("proxyEnabled")),
+                  React.createElement("p", null, t("proxyEnabledDescription"))),
+                React.createElement("button", {
+                  className: "dsh-grok-switch", type: "button", role: "switch",
+                  "aria-checked": proxyEnabled,
+                  "aria-label": `${t("proxyEnabled")}：${t(proxyEnabled ? "searchEnabled" : "searchDisabled")}`,
+                  "data-checked": proxyEnabled, "data-field": "proxyEnabled", disabled: proxyDisabled,
+                  onClick: () => { void updateProxyEnabled(!proxyEnabled) },
+                }, React.createElement("span", { className: "dsh-grok-visually-hidden" }, t(proxyEnabled ? "searchEnabled" : "searchDisabled"))))),
+            React.createElement("div", { className: "dsh-grok-proxy-form" },
+              React.createElement("label", { className: "dsh-grok-search-copy", htmlFor: "dsh-grok-proxy-url" },
+                React.createElement("strong", null, t("proxyAddress")),
+                React.createElement("p", null, t("proxyAddressDescription"))),
+              React.createElement("div", { className: "dsh-grok-proxy-row" },
+                React.createElement("input", {
+                  id: "dsh-grok-proxy-url", className: "dsh-grok-input", type: "text",
+                  inputMode: "url", spellCheck: false, autoComplete: "off",
+                  value: proxyDraft, disabled: proxyDisabled,
+                  placeholder: "http://127.0.0.1:7897",
+                  onChange: (event) => setProxyUrlDraft(event.target.value),
+                }),
+                React.createElement("button", {
+                  className: "dsh-grok-button dsh-grok-primary", type: "button",
+                  disabled: proxyDisabled || proxyDraft === proxyUrl,
+                  onClick: () => { void saveProxyUrl() },
+                }, configSaving === "proxyUrl" ? t("proxySaving") : t("proxySave")))),
+            React.createElement("p", { className: "dsh-grok-search-status", role: "status", "aria-live": "polite" }, `${t("proxyCurrent")}${networkLabel}`),
+            React.createElement("p", { className: "dsh-grok-search-risk" }, t("proxyFallbackHint")),
+            proxySaveError && React.createElement("p", { className: "dsh-grok-error", role: "alert" }, t("proxySaveFailed")))),
           React.createElement("article", { className: "dsh-grok-panel" },
             React.createElement("div", { className: "dsh-grok-models-head" }, React.createElement("h3", null, t("modelsTitle")), React.createElement("p", null, t("modelsDescription"))),
             React.createElement("div", { className: "dsh-grok-model-grid" },
@@ -527,15 +624,19 @@ window.__ModuleLoader__.load({
       return new Intl.NumberFormat().format(value)
     }
 
-    const inject = ["slots", "locale", "connection", "settingsScope"]
+    // Harness 0.2.0 replaced the per-plugin settings-scope service with the
+    // settings domain's shared `configForms`: `get(entryId)` returns the form
+    // controller for one Host plugin entry, whose namespace IS the entry id.
+    const inject = ["slots", "locale", "connection", "configForms"]
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(namespace, dictionaries), "dsh-grok: dictionaries")
       ctx.effect(() => installSettingsNavIcon(), "dsh-grok: settings nav icon")
       const t = ctx.locale.bind(namespace)
-      const searchSettings = ctx.settingsScope.bind({ namespace: "llm-grok", decode: decodeSearchConfig })
+      const pluginSettings = ctx.configForms.get("llm-grok")
+      ctx.effect(() => () => { void pluginSettings.dispose() }, "dsh-grok: settings form")
       ctx.slots.inject("settings.section", () => ctx.slots.register({
         name: "settings.section", id: "grok-auth", order: 45, label: () => t("nav"), locale: namespace,
-        inject: () => ({ connection: ctx.connection, t, searchSettings }),
+        inject: () => ({ connection: ctx.connection, t, pluginSettings }),
       }, GrokSettings))
     }
     module.exports.inject = inject

@@ -1,5 +1,13 @@
 # Grok Build Provider 文档索引
 
+## 2.1.0 / DSH 0.2.0-rc.2
+
+**未发布**。当前源码版本 `dsh-grok-provider@2.1.0`，只支持 Harness `0.2.0` 系列；`1.0.x` 在 `0.2.0-rc.2` 宿主上因 `offloadRequestImagesWithPolicy` named import 缺失而无法加载。
+
+`2.0.1` 完成 0.2.0 移植：设置改为条目所有权模型（命名空间 = 条目 id `llm-grok`、可编辑字段 `.volatile()`）、图片上限改为 `IMAGE_OFFLOAD_REQUIRED` 宿主决策协议、设置页从 `settingsScope` 迁到 `configForms`。`2.1.0` 在其上新增设置页可配置的出网代理（默认 `http://127.0.0.1:7897`，只作用于本插件请求；环境变量优先；本机代理未监听时回退直连，非本机代理失败关闭），诊断 outcome 增加闭集 `network` 路线字段。
+
+设计与证据见 [ADR-0013](adr/0013-dsh-0.2.0-settings-and-image-offload.md) 与 [ADR-0014](adr/0014-plugin-scoped-outbound-proxy.md)，接口契约见 [04-harness-contract](04-harness-contract.md)，实现状态见 [09-implementation-status](09-implementation-status.md)。未验证项（真实账号生成、Windows 真机、npm 发布）在 ADR 与状态文档中逐条列出。
+
 ## 1.0.5 / DSH 0.1.5-rc.2
 
 发布完成：npm `latest=1.0.5`；最终提交 `49f08ba62bd9eb77fbf122413e08f28fc56d7207`，双平台 CI `34734335106`，Trusted Publisher `34734462191`。唯一 81 文件制品的 SHA-256 为 `7e4772a8335ed9560db2ed59a34b9154f3f1ddc1a60be9707443648d6a72e77f`；Release/Registry 字节一致，Registry 安装、签名和 SLSA provenance 已验证。详见 [发布检查表](10-release-checklist.md)。
@@ -82,6 +90,9 @@ macOS 隔离宿主已验证状态、CLI `1.0.5`、两个模型和额度读取，
 - [ADR-0009：运行时版本诊断与闭合登录失败](./adr/0009-runtime-diagnostics-and-login-failures.md)
 - [ADR-0010：默认关闭且独立配置的 Web/X Search](./adr/0010-default-off-web-x-search.md)
 - [ADR-0011：有界认证恢复与部分流保留](./adr/0011-bounded-auth-recovery-and-partial-stream-preservation.md)
+- [ADR-0012：账户操作走共享 Connection API](./adr/0012-shared-api-auth-routes.md)
+- [ADR-0013：Harness 0.2.0 设置所有权与宿主图片淘汰](./adr/0013-dsh-0.2.0-settings-and-image-offload.md)
+- [ADR-0014：插件作用域的出网代理](./adr/0014-plugin-scoped-outbound-proxy.md)
 
 ## 发布与后续开发门禁
 
