@@ -30,6 +30,12 @@ npm run pack:check
 
 发布维护者还必须逐项完成 [`docs/10-release-checklist.md`](docs/10-release-checklist.md)。检查表全绿不代表可以自行发布；合并发布基线、创建 tag、GitHub Release 或 npm 版本前仍需仓库所有者明确授权。
 
+## 分支与推送
+
+- 开发主线是 [tight9527-lgtm/dsh-grok-provider](https://github.com/tight9527-lgtm/dsh-grok-provider) 的 `main` 分支（远端 `fork`）。本地 `main` 直接追踪 `fork/main`，`git push` / `git pull` 不带参数即作用于主线。
+- [yoshino-xiao7/dsh-grok-provider](https://github.com/yoshino-xiao7/dsh-grok-provider) 是上游（远端 `origin`），当前凭据对其没有写权限（推送返回 403），只作 PR 目标；它的主线分支名为 `yukiryou/main`，不是 `main`。
+- 需要上游合并时，从 `main` 切出主题分支推到 `fork`，再向上游开 PR；不要把 `origin/yukiryou/main` 设为本地 `main` 的上游。
+
 ## Pull Request 检查表
 
 - [ ] 变更解决一个清晰的问题，没有无关重构或格式化噪音；
